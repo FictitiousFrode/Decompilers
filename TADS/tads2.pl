@@ -2,8 +2,9 @@ use strict;			# 'Safest' operation level
 use warnings;		# Give warnings
 
 ##Version History
-my $Decompiler_Version		= 0.1;
+my $Decompiler_Version		= 0.2;
 #v0.1:	Initial structure for flow and storage
+#v0.2:	Parsing of data blocks
 
 ##Global variables##
 #File handling
@@ -34,6 +35,28 @@ my $Signature_TADS2_Res		= chr(84).chr(65).chr(68).chr(83).chr(50).chr(32).chr(1
 my $Encryption_Seed			= 0x3f;
 my $Encryption_Increment	= 0x40;
 
+sub namePropertyType($){
+	my $type = shift;
+	if	($type eq 1) {return 'number'}
+	if	($type eq 2) {return 'object'}
+	if	($type eq 3) {return 's-string'}
+	if	($type eq 4) {return 'baseptr'}
+	if	($type eq 5) {return 'nil'}
+	if	($type eq 6) {return 'code'}
+	if	($type eq 7) {return 'list'}
+	if	($type eq 8) {return 'true'}
+	if	($type eq 9) {return 'd-string'}
+	if	($type eq 10) {return 'fnaddr'}
+	if	($type eq 11) {return 'tpl'}
+	if	($type eq 13) {return 'property'}
+	if	($type eq 14) {return 'demand'}
+	if	($type eq 15) {return 'synonym'}
+	if	($type eq 16) {return 'redir'}
+	if	($type eq 17) {return 'tpl2'}
+	return 'unknown';
+
+}
+
 #Game Details
 my $Flag_SymbolTable;		# include symbol table in output file
 my $Flags_SourceTracking;	# include source file tracking information
@@ -44,9 +67,25 @@ my $Flags_Fastload;			# fast-load records are in file
 my $Flags_CaseFolding;		# case folding was turned on in original compile
 my $Flags_NewStyleLine;		# new-style line records
 
+#Game Contents
+my @Objects 		= ();	# In-game objects
+
+##Translation 
+#Mappings
+my @Translate_Action			= ();	# Names for actions aren't stored anywhere
+my @Translate_Builtin			= ();
+my @Translate_Object			= ();
+my @Translate_Object_Argument	= ();
+my @Translate_Object_Local		= ();
+my @Translate_Propertys			= ();
+my @Translate_Property_Argument	= ();
+my @Translate_Property_Local	= ();
+#Namings - TODO
+
 ##File Handling
 #Decrypts the block of text passed in
-sub decrypt ($){
+sub decrypt($){
+	return unless $Flags_Encrypted;
 	my $block	= shift;
 	my $size	= length($block);
 	my $mask	= $Encryption_Seed;
@@ -55,12 +94,26 @@ sub decrypt ($){
 		$block_mask	.= chr($mask);
 		$mask		= ($mask + $Encryption_Increment) % 256;
 	}
-	$block	= $block ^ $block_mask;
+	return $block ^ $block_mask;
+}
+sub debug($;$){
+	my $block	= shift;
+	my $id		= shift;
+	my $size	= length $block;
+	print $File_Log "Debug dump for $id\n"	if defined $id;
+	for (my $i=0 ; $i<$size ; $i++) {
+		my $char	= substr($block, $i, 1);
+		my $byte	= ord($char);
+		$char		= '' if $byte > 128 || $byte < 32;
+		my $int		= '';
+		$int		= unpack('S', substr($block, $i, 2)) if $i < ($size-1);
+		print $File_Log "\t$i\t$byte\t$char\t$int\n"
+	}
 }
 
 ##Parsing
 sub parseHeader(){
-	#The header is 48 bytes long. Detailed specification is not available
+	#The header is 48 bytes long
 	#	 0-10	File header signature
 	#	11-12	Reserved but unused (?)
 	#	13-18	Compiler version (?)
@@ -93,7 +146,6 @@ sub parseHeader(){
 	$Flags_Fastload			=	$flags & 32;
 	$Flags_CaseFolding		=	$flags & 64;
 	$Flags_NewStyleLine		=	$flags & 128;
-	
 	#Write to log
 	print $File_Log "Decompiler v$Decompiler_Version on $FileName_Input ";
 	print $File_Log "(a TADS2-Game file)\n"		if $signature eq $Signature_TADS2_Game;
@@ -102,17 +154,183 @@ sub parseHeader(){
 	print $File_Log "\tUnknown 1: $unknown1\n";
 	print $File_Log "\tUnknown 2: $unknown2\n";
 	print $File_Log "\tUnknown 3: $unknown3\n";
-	print $File_Log "Enabled flags ($flags):\n";
-	print $File_Log "\tInclude symbol table in output file\n"				if $Flag_SymbolTable;
-	print $File_Log "\tInclude source file tracking information\n"			if $Flags_SourceTracking;
-	print $File_Log "\tPreinit needs to be run after reading game\n"		if $Flags_Preinit;
-	print $File_Log "\t'encrypt' objects prior to writing them\n"			if $Flags_Encrypted;
-	print $File_Log "\tWriting precompiled header\n"						if $Flags_Precompiled;
-	print $File_Log "\tFast-load records are in file\n"						if $Flags_Fastload;
-	print $File_Log "\tCase folding was turned on in original compile\n"	if $Flags_CaseFolding;
-	print $File_Log "\tNew-style line records\n"							if $Flags_NewStyleLine;
+	print $File_Log "\tEnabled flags ($flags):\n";
+	print $File_Log "\t\tInclude symbol table in output file\n"				if $Flag_SymbolTable;
+	print $File_Log "\t\tInclude source file tracking information\n"		if $Flags_SourceTracking;
+	print $File_Log "\t\tPreinit needs to be run after reading game\n"		if $Flags_Preinit;
+	print $File_Log "\t\t'encrypt' objects prior to writing them\n"			if $Flags_Encrypted;
+	print $File_Log "\t\tWriting precompiled header\n"						if $Flags_Precompiled;
+	print $File_Log "\t\tFast-load records are in file\n"					if $Flags_Fastload;
+	print $File_Log "\t\tCase folding was turned on in original compile\n"	if $Flags_CaseFolding;
+	print $File_Log "\t\tNew-style line records\n"							if $Flags_NewStyleLine;
 }
-
+sub parseFile(){
+	#The compiled file consists of several blocks of varying length.
+	for (;;){
+		#Each block starts with a header of varying length
+		my $size_type;	# 1 byte; size of the type field
+		my $block_type;	# X bytes as defined by size_type; the type of data block
+		my $next_block;	# 4 bytes; location of the next block.
+		my $block_size;
+		my $block;
+		read ($File_Input, $size_type, 1);
+		read ($File_Input, $block_type, unpack('C', $size_type));
+		read ($File_Input, $next_block, 4);
+		$block_size	= unpack('L', $next_block) - tell($File_Input);
+		#Log the block type, and break out at the end of the file.
+		print $File_Log "$block_type: $block_size bytes\n";
+		last unless $block_size;
+		last if	$block_type eq '$EOF';
+		#read the contents of the block and parse it
+		read ($File_Input, $block, $block_size);
+		if	($block_type eq 'XSI')	{ parseBlockXSI($block) }	# XOR Seed Information
+		if	($block_type eq 'OBJ')	{ parseBlockOBJ($block) }	# OBJects
+		#FST - does not contain anything useful for decompilation, no need to parse.
+		#INH
+		#FMTSTR
+		#REQ
+		#CMPD
+		#SPECWORD
+		#VOC
+		if	($block_type eq 'HTMLRES')	{ parseBlockRES($block) }	# Embedded (HTML) RESources
+	}
+}
+#XSI blocks contains the XOR Seed Information for the compiled file.
+sub parseBlockXSI($){
+	my $block = shift;
+	#Read initial seed value and increment value
+	$Encryption_Seed		= unpack('C', substr($block, 0, 1));
+	$Encryption_Increment	= unpack('C', substr($block, 1, 1));
+	print $File_Log "\t($Encryption_Seed+$Encryption_Increment)\n";
+}
+#OBJect blocks contain all the objects of the game
+sub parseBlockOBJ($) {
+	my $block	= shift;
+	my $length	= length($block);
+	#Objects are stored sequentially with no dividers or indication of how many there are;
+	#We need to read the entire block sequentially.
+	my $pos		= 0;
+	my $count	= 0;				# Number of objects found
+	my $verbs	= 0;				# Number of verbs found in preparsing
+	while ($pos < $length) {
+		#Object Header:
+		# 0		Object type
+		# 1-2	Object ID (UINT16)
+		# 3-4	Unknown (often the same as size)
+		# 5-6	Size (UINT16)
+		my $type			= unpack('C', substr($block, $pos, 1));
+		my $id				= unpack('S', substr($block, $pos + 1, 2));
+		my $unknown			= unpack('S', substr($block, $pos + 3, 2));
+		my $size			= unpack('S', substr($block, $pos + 5, 2));
+		#Read object data, stored in encrypted form
+		my $data			= decrypt(substr($block, $pos + 7, $size));
+		$pos	+= 7 + $size;
+		$count++;
+		#Check type and stored
+		if		($type eq 1) { # Function
+			#Functions are just code, so we simply store it
+			print $File_Log "\tObj$id: function ($size bytes)\n";
+			print $File_Log "\t\tUnknown is $unknown\n" unless $size eq $unknown;
+			$Objects[$id]	= {
+				type		=> $type,
+				code		=> $data
+			};
+		}
+		elsif	($type eq 2) { # Meta-Object
+			#Meta-Objects have their own sub-header, followed by data
+			#  0-1	Workspace (UINT16)
+			#  2-3	Flags (bitmap)
+			#  4-5	Superclass count
+			#  6-7	Property count
+			#  8-9	offset to next free byte in prop area (UInt16): Not needed for decompile
+			# 10-11	offset to end of static area, reset point (UInt16): Not needed for decompile
+			# 12-13 size of 'static' (stored) properties (UInt16)
+			my $workspace		= unpack('S', substr($data, 0, 2));
+			my $flags			= unpack('S', substr($data, 2, 2));
+			my $superclasses	= unpack('S', substr($data, 4, 2));
+			my $properties		= unpack('S', substr($data, 6, 2));
+			print $File_Log "\tObj$id: object ($size bytes) in $workspace with $superclasses parents and $properties properties\n";
+			#Read superclasses, a list of UINT16 object ids
+			my @superclass;
+			for (my $i=0 ; $i<$superclasses ; $i++) {
+				push @superclass, unpack('S', substr($data, 14 + 2*$i, 2));
+			}
+			#Parse properties
+			my %property	= ();
+			my $pos_data	= 14 + 2 * $superclasses;				# Skip past header and super classes
+			$pos_data 		+= 2 * $properties if $flags & 2;	# Skip past property index if needed
+			for (my $i=0 ; $i<$properties ; $i++) {
+				#Parse property header
+				my $prop_id			= unpack('S',	substr($data, $pos_data + 0, 2));
+				my $prop_type		= ord	(		substr($data, $pos_data + 2));
+				my $prop_size		= unpack('S',	substr($data, $pos_data + 3, 2));
+				my $prop_flag		= ord	(		substr($data, $pos_data + 5));
+				my $prop_data		= 				substr($data, $pos_data + 6, $prop_size);
+				#Store the relevant data
+				$property{$prop_id}	= {
+					type	=> $prop_type,
+					data	=> $prop_data
+				};
+				print $File_Log "\t\tProp$prop_id ($prop_size bytes): ".namePropertyType($prop_type)." ($prop_flag)\n";
+				$pos_data += 6 + $prop_size;
+			}
+			#Store the decompiled info
+			$Objects[$id]	= {
+				type		=> $type,
+				workspace	=> $workspace,
+				flags		=> {
+					isClass		=> ($flags & 1),	# Is the object a class
+					hasPropInd	=> ($flags & 2),	# Is there an encoded property index
+					isModified	=> ($flags & 4)		# Modified by a newer definition
+				},
+				superclass	=> \@superclass,
+				properties	=> \%property
+			};
+		}
+		else{
+			print $File_Log "\tObj$id: Unhandled type: $type\n";
+			#TODO: Add translation of type
+		}
+		
+		
+		
+		
+	}
+}
+#RESource blocks contain embedded files
+sub parseBlockRES($) {
+	#The block is divided into three distinct parts:
+	#* Header, defining number of entries
+	#* Metadata for each entry
+	#* Embedded data for each entry
+	my $block	= shift;
+	my $length	= length($block);
+	#Block header
+	# 4 Bytes: Number of entries
+	# 4 Bytes: Offset to where data begins
+	my $entries	= unpack("L", substr($block, 0, 4));
+	my $offset	= unpack("L", substr($block, 4, 4));
+	#Read metadata and embedded data for each entry in one pass
+	my $pos		= 8;
+	for my $i (1 .. $entries){
+		#Metadata
+		my $data_pos	= unpack("L", substr($block, $pos, 4));
+		my $size		= unpack("L", substr($block, $pos + 4, 4));
+		my $name_size	= unpack("S", substr($block, $pos + 8, 2));
+		my $name		= substr($block, $pos + 10, $name_size);
+		$pos += $name_size + 10;
+		print $File_Log "\t$name ($size bytes) at $data_pos\n";
+		#Embedded data, only read when not in minimal mode
+		unless ($Option_Minimal){
+			#TODO: Make directory
+			my $file_resource;
+			open($file_resource, "> :raw :bytes", $FileName_Path . $name)
+				|| die "$0: can't open ".$FileName_Path .  $name . " in write-open mode: $!";
+			print $file_resource substr($block, $data_pos + $offset, $size);
+			close $file_resource;
+		}
+	}
+}
 ##Main Program Loop
 #Parse command-line arguments
 for (;;) {
@@ -165,8 +383,8 @@ open($File_Output, "> :raw :bytes", $FileName_Path . $FileName_Output)
 	|| die "$0: can't open " . $FileName_Path . $FileName_Output . "for writing: $!";
 
 #Process the game archive
-parseHeader();	#Read header and determine version/type of file
-#parse();		# Parse the input file into the local data structures
+parseHeader();	# Read header and determine version/type of file
+parseFile();	# Parse the input file into the local data structures
 close($File_Input);
 #TODO: Read symbol file if called for
 #TODO: Analyze the game file
