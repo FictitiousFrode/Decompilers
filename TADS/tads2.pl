@@ -38,6 +38,7 @@ my $Signature_TADS2_Game	= chr(84).chr(65).chr(68).chr(83).chr(50).chr(32).chr( 
 my $Signature_TADS2_Res		= chr(84).chr(65).chr(68).chr(83).chr(50).chr(32).chr(114).chr(115).chr( 99).chr(10).chr(13);
 my $Encryption_Seed			= 0x3f;
 my $Encryption_Increment	= 0x40;
+my $Null_Value				= 65535;
 
 #Names corresponding to the property types
 sub namePropertyType($){
@@ -72,9 +73,9 @@ my $Flags_CaseFolding;		# case folding was turned on in original compile
 my $Flags_NewStyleLine;		# new-style line records
 
 #Game Contents
-my @Objects 		= ();	# Array of hash-map representing the decompiled objects
-my @Formats			= ();	# Array of strings storing the formated strings
-my @Compounds 		= ();	# Array of strings storing the compunded tokens
+my @Objects 			= ();	# Array of hash-map representing the decompiled objects
+my @Formats				= ();	# Array of strings storing the formated strings
+my @Compounds 			= ();	# Array of strings storing the compunded tokens
 
 ##Translation
 #Start points; used for skipping printing of basic objects and properties
@@ -102,12 +103,13 @@ sub nameBuiltin($) {
 }
 sub nameObject($) {
 	my $id = shift;
-	return 'nullObj'				if ($id eq 65535);
+	return 'nullObj'				if ($id eq $Null_Value);
 	return $Translate_Object[$id]	if defined $Translate_Object[$id];
 	return "Obj$id";
 }
 sub nameProperty($) {
 	my $id = shift;
+	return 'nullprop'				if ($id eq $Null_Value);
 	return $Translate_Property[$id] if defined $Translate_Property[$id];
 	return "prop$id";
 }
@@ -631,10 +633,16 @@ sub parseBlockFMTSTR($){
 		my $text	= substr($block, $pos + 4, $size - 2);
 		$pos		+= 2 + $size;
 		#TODO: Parse the text into a name for the property
+		my $prep_rename;
+		my $prep_name					= uniformName('fmt '.$text);
+		$Translate_Property[$prop]		= $prep_name unless defined $Translate_Property[$prop];
+		$prep_rename					= 1		unless $prep_name eq $Translate_Property[$prop];
+		print $File_Log	"\tProp$prop: $prep_name"			if $prep_rename || $Option_Verbose;
+		print $File_Log "\t -> ".nameObject($prep_name)		if $prep_rename;
+		print $File_Log	"\t($text)\n"						if $prep_rename || $Option_Verbose;
 		my $format	= "'$text' " . nameProperty($prop);
 		push @Formats, $format;
 		$found++;
-		print $File_Log	"\t$format\n" if $Option_Verbose;
 	}
 	print $File_Log "\tFound $found formated strings\n";
 }
@@ -698,7 +706,7 @@ sub parseBlockREQ($){
 	}
 	for my $i(0 .. $found){
 		my $object	= unpack('S', substr($block, $i * 2, 2));
-		unless ($object eq 65535){
+		unless ($object eq $Null_Value){
 			print $File_Log	"\t$i:\tObj$object\t($req_names[$i])\n" if $Option_Verbose;
 			print $File_Log	"\t$i:\tObj$object is named $Translate_Object[$object]\n"
 				if defined $Translate_Object[$object] 
@@ -818,11 +826,15 @@ sub parseBlockRES($) {
 }
 ##Analyzing
 sub analyze(){
+	print $File_Log "Analyzing Actions\n";
 	analyzeActions();
+	print $File_Log "Analyzing Function Code Segments\n";
+	analyzeFunctionCode();
+	print $File_Log "Analyzing Property Code Segments\n";
+	analyzePropertyCode();
 }
 #Look through all objects, trying to find actions and verbs
 sub analyzeActions(){
-	print $File_Log "Analyzing Actions\n";
 	#Actions aren't explicitly numbered so we keep a running tally
 	my $action	= 0;
 	for my $obj (0 .. $#Objects) {
@@ -833,35 +845,45 @@ sub analyzeActions(){
 		#Look through all properties
 		for my $prop ( keys %{ $Objects[$obj]{properties} } ) {
 			my $type	= $Objects[$obj]{properties}{$prop}{type};
-			my $data	= $Objects[$obj]{properties}{$prop}{data};
-			unless (defined $type && defined $data) {
-				warn "Unable to analyze $obj.$prop - Missing type or data";
+			unless (defined $type) {
+				print $File_Log "\tUnable to analyze $obj.$prop - Missing type";
+				warn "Unable to analyze $obj.$prop - Missing type";
 				next;
 			}
 			#TPL2 contains the action defintions we are looking for
 			next unless namePropertyType($type) eq 'tpl2';
-			#Generate a name the object has a verb (prop id 8)
-			my $name	= "Action$action";
-			$name		= uniformName(propertyString($obj, 8))	if (defined $Objects[$obj]{properties}{8});
-			my $verb	= $name."Verb";
-			#Try to name the action and object if they are unnamed, and see if we changed anything
-			my $action_rename			= 0;
-			my $object_rename			= 0;
-			$Translate_Action[$action]	= $name unless defined $Translate_Action[$action];
-			$Translate_Object[$obj]		= $verb unless defined $Translate_Object[$obj];
-			$action_rename				= 1 	unless $name eq $Translate_Action[$action];
-			$object_rename				= 1		unless $verb eq $Translate_Object[$obj];
-			#Log the results as needed
-			if ($Option_Verbose || $action_rename || $object_rename){
-				print $File_Log "\t$action\tObj$obj\n";	#Print location intro
-				print $File_Log	"\t\tAction: $name"				if $action_rename || $Option_Verbose;
-				print $File_Log "\t -> ".nameAction($action)	if $action_rename;
-				print $File_Log	"\n"							if $action_rename || $Option_Verbose;
-				print $File_Log	"\t\tObject: $verb"				if $object_rename || $Option_Verbose;
-				print $File_Log "\t -> ".nameObject($obj)		if $object_rename;
-				print $File_Log	"\n"							if $object_rename || $Option_Verbose;
+			my $data	= $Objects[$obj]{properties}{$prop}{data};
+			unless (defined $data) {
+				print $File_Log "\tUnable to analyze $obj.$prop - Missing data";
+				warn "Unable to analyze $obj.$prop - Missing data";
+				next;
 			}
-			#Contains one or more templates for prepositions
+			#Generate a name the object has a verb (prop id 8)
+			my $action_name	= "Action$action";
+			$action_name	= uniformName(propertyString($obj, 8))	if (defined $Objects[$obj]{properties}{8});
+			my $header_needed	= 1;
+			print $File_Log "\t$action\tObj$obj\n"			if $Option_Verbose;
+			undef $header_needed							if $Option_Verbose;
+			#Try to rename action
+			$Translate_Action[$action]	= $action_name unless defined $Translate_Action[$action];
+			my $action_rename;
+			$action_rename				= 1 	unless $action_name eq $Translate_Action[$action];
+			print $File_Log "\t$action\tObj$obj\n"			if $action_rename && $header_needed;
+			print $File_Log	"\t\tAction: $action_name"		if $action_rename || $Option_Verbose;
+			print $File_Log "\t -> ".nameAction($action)	if $action_rename;
+			print $File_Log	"\n"							if $action_rename || $Option_Verbose;
+			undef $header_needed							if $action_rename;
+			#Try to rename verb object
+			my $verb_name	= $action_name."Verb";
+			$Translate_Object[$obj]		= $verb_name unless defined $Translate_Object[$obj];
+			my $verb_rename;
+			$verb_rename				= 1		unless $verb_name eq $Translate_Object[$obj];
+			print $File_Log "\t$action\tObj$obj\n"			if $verb_rename && $header_needed;
+			print $File_Log	"\t\tObject: $verb_name"		if $verb_rename || $Option_Verbose;
+			print $File_Log "\t -> ".nameObject($obj)		if $verb_rename;
+			print $File_Log	"\n"							if $verb_rename || $Option_Verbose;
+			undef $header_needed							if $verb_rename;
+			#Templates for prepositions
 			my $templates	= ord(substr($data, 0));
 			for (my $i=0 ; $i < $templates ; $i++) {
 				#Read identifiers for template
@@ -872,27 +894,148 @@ sub analyzeActions(){
 				my $exc_do_prop	= unpack('S', substr($data, $i * 16 + 9, 2));	# DirectObject execute property
 				#5 extra bytes at the end, which seems to be at least in part flag data.
 				#Try to rename the preposition object
-				unless ($prep_obj eq 65535){ #Null-value
-					my $prep						= uniformName(propertyString($prep_obj, 8));
-					my $prep_rename					= 0;
-					$Translate_Object[$prep_obj]	= $prep unless defined $Translate_Object[$prep_obj];
-					$prep_rename					= 1		unless $prep eq $Translate_Object[$prep_obj];
-					print $File_Log	"\t\tPrepObj: $prep"			if $prep_rename || $Option_Verbose;
-					print $File_Log "\t -> ".nameObject($prep)		if $prep_rename;
-					print $File_Log	"\n"							if $prep_rename || $Option_Verbose;
+				my $prep_name;
+				my $subheader_needed	= 1;
+				unless ($prep_obj eq $Null_Value){ #Null-value
+					$prep_name						= uniformName(propertyString($prep_obj, 8));
+					$Translate_Object[$prep_obj]	= $prep_name unless defined $Translate_Object[$prep_obj];
+					my $prep_rename;
+					$prep_rename					= 1		unless $prep_name eq $Translate_Object[$prep_obj];
+					print $File_Log "\t$action\tObj$obj\n"					if $prep_rename && $header_needed;
+					print $File_Log	"\t\t$prep_name($prep_obj):"	if $prep_rename || $Option_Verbose;
+					print $File_Log "\t -> ".nameObject($prep_name)			if $prep_rename;
+					print $File_Log	"\n"									if $prep_rename || $Option_Verbose;
+					undef $header_needed									if $prep_rename;
+					undef $subheader_needed									if $prep_rename || $Option_Verbose;
 				}
-				#TODO: Update the io/do properties
+				if ($ver_io_prop) { #Indirect Object Verification
+					#Property Arguments
+					@{ $Translate_Property_Argument[$ver_io_prop] }	= ('actor');
+					#Property Rename
+					my $ver_io_name	= uniformName('Ver Io '.$action_name);
+					$Translate_Property[$ver_io_prop]	= $ver_io_name unless defined $Translate_Property[$ver_io_prop];
+					my $ver_io_rename;
+					$ver_io_rename						= 1		unless $ver_io_name eq $Translate_Property[$ver_io_prop];
+					print $File_Log "\t$action\tObj$obj\n"						if $ver_io_rename && $header_needed;
+					print $File_Log	"\t\t$prep_name:\n"							if $subheader_needed && not $prep_obj eq $Null_Value
+																					&& ($ver_io_rename || $Option_Verbose);
+					print $File_Log	"\t\tNoPrep:\n"								if $subheader_needed && $prep_obj eq $Null_Value
+																					&& ($ver_io_rename || $Option_Verbose);
+					print $File_Log	"\t\t\t$ver_io_prop\tVerIo\t$ver_io_name"	if $ver_io_rename || $Option_Verbose;
+					print $File_Log "\t -> ".nameProperty($ver_io_prop)			if $ver_io_rename;
+					print $File_Log	"\n"										if $ver_io_rename || $Option_Verbose;
+					undef $header_needed										if $ver_io_rename;
+					undef $subheader_needed										if $ver_io_rename || $Option_Verbose;
+				}
+				if ($exc_io_prop) { #Indirect Object Execution
+					#Property Arguments
+					@{ $Translate_Property_Argument[$exc_io_prop] }	= ('actor', 'dobj');
+					#Property Rename
+					my $exc_io_name	= uniformName('Io '.$action_name);
+					$Translate_Property[$exc_io_prop]	= $exc_io_name unless defined $Translate_Property[$exc_io_prop];
+					my $exc_io_rename;
+					$exc_io_rename						= 1		unless $exc_io_name eq $Translate_Property[$exc_io_prop];
+					print $File_Log "\t$action\tObj$obj\n"						if $exc_io_rename && $header_needed;
+					print $File_Log	"\t\t$prep_name:\n"							if $subheader_needed && not $prep_obj eq $Null_Value
+																					&& ($exc_io_rename || $Option_Verbose);
+					print $File_Log	"\t\tNoPrep:\n"								if $subheader_needed && $prep_obj eq $Null_Value
+																					&& ($exc_io_rename || $Option_Verbose);
+					print $File_Log	"\t\t\t$exc_io_prop\tIo\t\t$exc_io_name"	if $exc_io_rename || $Option_Verbose;
+					print $File_Log "\t -> ".nameProperty($exc_io_prop)			if $exc_io_rename;
+					print $File_Log	"\n"										if $exc_io_rename || $Option_Verbose;
+					undef $header_needed										if $exc_io_rename;
+					undef $subheader_needed										if $exc_io_rename || $Option_Verbose;
+				}
+				if ($ver_do_prop) { #Direct Object Verification
+					#Property Arguments
+					@{ $Translate_Property_Argument[$ver_do_prop] }	= ('actor', 'iobj')	if ($exc_io_prop);
+					@{ $Translate_Property_Argument[$ver_do_prop] }	= ('actor')		unless ($exc_io_prop);
+					#Property Rename
+					my $ver_do_name	= uniformName('Ver Do '.$action_name);
+					$Translate_Property[$ver_do_prop]	= $ver_do_name unless defined $Translate_Property[$ver_do_prop];
+					my $ver_do_rename;
+					$ver_do_rename						= 1		unless $ver_do_name eq $Translate_Property[$ver_do_prop];
+					print $File_Log "\t$action\tObj$obj\n"						if $ver_do_rename && $header_needed;
+					print $File_Log	"\t\t$prep_name:\n"							if $subheader_needed && not $prep_obj eq $Null_Value
+																					&& ($ver_do_rename || $Option_Verbose);
+					print $File_Log	"\t\tNoPrep:\n"								if $subheader_needed && $prep_obj eq $Null_Value
+																					&& ($ver_do_rename || $Option_Verbose);
+					print $File_Log	"\t\t\t$ver_do_prop\tVerDo\t$ver_do_name"	if $ver_do_rename || $Option_Verbose;
+					print $File_Log "\t -> ".nameProperty($ver_do_prop)			if $ver_do_rename;
+					print $File_Log	"\n"										if $ver_do_rename || $Option_Verbose;
+					undef $header_needed										if $ver_do_rename;
+					undef $subheader_needed										if $ver_do_rename || $Option_Verbose;
+				}
+				if ($exc_do_prop) { #Direct Object Execution
+					#Property Arguments
+					@{ $Translate_Property_Argument[$exc_do_prop] }	= ('actor', 'iobj')	if ($exc_io_prop);
+					@{ $Translate_Property_Argument[$exc_do_prop] }	= ('actor')		unless ($exc_io_prop);
+					#Property Rename
+					my $exc_do_name	= uniformName('Do '.$action_name);
+					$Translate_Property[$exc_do_prop]	= $exc_do_name unless defined $Translate_Property[$exc_do_prop];
+					my $exc_do_rename;
+					$exc_do_rename						= 1		unless $exc_do_name eq $Translate_Property[$exc_do_prop];
+					print $File_Log "\t$action\tObj$obj\n"						if $exc_do_rename && $header_needed;
+					print $File_Log	"\t\t$prep_name:\n"							if $subheader_needed && not $prep_obj eq $Null_Value
+																					&& ($exc_do_rename || $Option_Verbose);
+					print $File_Log	"\t\tNoPrep:\n"								if $subheader_needed && $prep_obj eq $Null_Value
+																					&& ($exc_do_rename || $Option_Verbose);
+					print $File_Log	"\t\t\t$exc_do_prop\tDo\t\t$exc_do_name"	if $exc_do_rename || $Option_Verbose;
+					print $File_Log "\t -> ".nameProperty($exc_do_prop)			if $exc_do_rename;
+					print $File_Log	"\n"										if $exc_do_rename || $Option_Verbose;
+					undef $header_needed										if $exc_do_rename;
+					undef $subheader_needed										if $exc_do_rename || $Option_Verbose;
+				}
 			}
 			$action++;
 		}
 
 	}
 }
+#Look through all objects, analyzing the code segments of function objects
+sub analyzeFunctionCode(){
+	for my $obj (0 .. $#Objects) {
+		#Not all Object ID's are actually used
+		next unless defined $Objects[$obj];
+		#Not all objects have properties
+		next unless $Objects[$obj]{type} eq 1;
+		my $codeblock = $Objects[$obj]{code};
+		#TODO: Decode the codeblock and store the result
+	}
+}
+#Look through all objects, analyzing the code segments of code properties
+sub analyzePropertyCode(){
+	for my $obj (0 .. $#Objects) {
+		#Not all Object ID's are actually used
+		next unless defined $Objects[$obj];
+		#Not all objects have properties
+		next unless defined $Objects[$obj]{properties};
+		#Look through all properties
+		for my $prop ( keys %{ $Objects[$obj]{properties} } ) {
+			my $type	= $Objects[$obj]{properties}{$prop}{type};
+			unless (defined $type) {
+				print $File_Log "\tUnable to analyze $obj.$prop - Missing type";
+				warn "Unable to analyze $obj.$prop - Missing type";
+				next;
+			}
+			#Look for code properties
+			next unless namePropertyType($type) eq 'code';
+			my $codeblock = $Objects[$obj]{properties}{$prop}{data};
+			unless (defined $codeblock) {
+				print $File_Log "\tUnable to analyze $obj.$prop - Missing data";
+				warn "Unable to analyze $obj.$prop - Missing data";
+				next;
+			}
+			#TODO: Decode the codeblock and store the result
+		}
+	}
+}
 #Convert text into uniform naming without spaces or quotes
 sub uniformName($){
 	my $text	= lc(shift);				# Lower case
 	$text		=~ s/\s+/ /;				# Convert all whitespace to spaces, and trim multiples
-	$text		=~ s/['\"]|^\s+|\s+$//g;	# Trim all '" and leading/trailing whitespace
+	$text		=~ s/[-_'\"]//g;				# Trim all unwanted characters
+	$text		=~ s/^\s+|\s+$//g;			# Trim leading/trailing whitespace
 	$text		=~ s/ (.)/uc($1)/ge;		# Remove spaces, capitalizing the next letter
 	return $text;
 }
@@ -924,7 +1067,6 @@ sub arrayString($;$){
 	}
 	return $text;
 }
-
 ##Decoding
 #Decode a property given it's type; lists need to be interpreted recursively
 sub decodeProperty($$);
@@ -1037,7 +1179,7 @@ else{
 #Some sanity checking
 die "$FileName_Input is not a valid file"	unless -f $FileName_Input;
 die "Overwriting existing symbol file with autogenerated is not supported in minimal mode"
-	if -e $FileName_Generate && $Option_Minimal;
+	if defined $FileName_Generate && $Option_Minimal && -e $FileName_Generate ;
 
 #Create output path
 mkdir $FileName_Path						unless -e $FileName_Path;
