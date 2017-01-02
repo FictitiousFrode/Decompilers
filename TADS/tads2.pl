@@ -2,11 +2,12 @@ use strict;			# 'Safest' operation level
 use warnings;		# Give warnings
 
 ##Version History
-my $Decompiler_Version		= 0.4;
+my $Decompiler_Version		= 0.5;
 #v0.1:	Initial structure for flow and storage
 #v0.2:	Parsing of data blocks (Headers + XSI/OBJ/RES)
 #v0.3:	Generation and parsing of symbol file
 #v0.4:	Verbose mode implementation, parsing of VOC/CMPD/FMTSTR
+#v0.5:	Action analyzis and property decoding
 
 ##Global variables##
 #File handling
@@ -57,7 +58,7 @@ sub namePropertyType($){
 	if ($type eq 15)	{return 'synonym'}
 	if ($type eq 16)	{return 'redir'}
 	if ($type eq 17)	{return 'tpl2'}
-	return 'unknown';
+	return "unknown ($type)";
 }
 
 #Game Details
@@ -769,9 +770,9 @@ sub parseBlockVOC($){
 			my $text	= substr($data, 0, $size1);
 			$text		.= ' '.substr($data, $size1, $size2) if ($size2 > 0);
 			# Store in object's vocabulary list
-			die "Vocabulary for undefined Object: Obj$obj_id" unless defined $Objects[$obj_id];
-			$Objects[$obj_id]{vocabulary}			= {} unless $Objects[$obj_id]{vocabulary};
-			$Objects[$obj_id]{vocabulary}{$prop_id}	= [] unless defined $Objects[$obj_id]{vocabulary}{$prop_id};
+			die "Vocabulary for undefined Object: Obj$obj_id"	unless defined $Objects[$obj_id];
+			$Objects[$obj_id]{vocabulary}			= {}		unless $Objects[$obj_id]{vocabulary};
+			$Objects[$obj_id]{vocabulary}{$prop_id}	= []		unless defined $Objects[$obj_id]{vocabulary}{$prop_id};
 			push @{ $Objects[$obj_id]{vocabulary}{$prop_id} }, $text;
 #			print $File_Log "\tObj$obj_id.prop$prop_id\t= '$text'\n";
 		}
@@ -792,15 +793,15 @@ sub parseBlockRES($) {
 	#Block header
 	# 4 Bytes: Number of entries
 	# 4 Bytes: Offset to where data begins
-	my $entries	= unpack("L", substr($block, 0, 4));
-	my $offset	= unpack("L", substr($block, 4, 4));
+	my $entries	= unpack('L', substr($block, 0, 4));
+	my $offset	= unpack('L', substr($block, 4, 4));
 	#Read metadata and embedded data for each entry in one pass
 	my $pos		= 8;
 	for my $i (1 .. $entries){
 		#Metadata
-		my $data_pos	= unpack("L", substr($block, $pos, 4));
-		my $size		= unpack("L", substr($block, $pos + 4, 4));
-		my $name_size	= unpack("S", substr($block, $pos + 8, 2));
+		my $data_pos	= unpack('L', substr($block, $pos, 4));
+		my $size		= unpack('L', substr($block, $pos + 4, 4));
+		my $name_size	= unpack('S', substr($block, $pos + 8, 2));
 		my $name		= substr($block, $pos + 10, $name_size);
 		$pos += $name_size + 10;
 		print $File_Log "\t$name ($size bytes) at $data_pos\n";
@@ -809,11 +810,190 @@ sub parseBlockRES($) {
 			#TODO: Make directory
 			my $file_resource;
 			open($file_resource, "> :raw :bytes", $FileName_Path . $name)
-				|| die "$0: can't open ".$FileName_Path .  $name . " in write-open mode: $!";
+				|| die "$0: can't open ".$FileName_Path . $name . " in write-open mode: $!";
 			print $file_resource substr($block, $data_pos + $offset, $size);
 			close $file_resource;
 		}
 	}
+}
+##Analyzing
+sub analyze(){
+	analyzeActions();
+}
+#Look through all objects, trying to find actions and verbs
+sub analyzeActions(){
+	print $File_Log "Analyzing Actions\n";
+	#Actions aren't explicitly numbered so we keep a running tally
+	my $action	= 0;
+	for my $obj (0 .. $#Objects) {
+		#Not all Object ID's are actually used
+		next unless defined $Objects[$obj];
+		#Not all objects have properties
+		next unless defined $Objects[$obj]{properties};
+		#Look through all properties
+		for my $prop ( keys %{ $Objects[$obj]{properties} } ) {
+			my $type	= $Objects[$obj]{properties}{$prop}{type};
+			my $data	= $Objects[$obj]{properties}{$prop}{data};
+			unless (defined $type && defined $data) {
+				warn "Unable to analyze $obj.$prop - Missing type or data";
+				next;
+			}
+			#TPL2 contains the action defintions we are looking for
+			next unless namePropertyType($type) eq 'tpl2';
+			#Generate a name the object has a verb (prop id 8)
+			my $name	= "Action$action";
+			$name		= uniformName(propertyString($obj, 8))	if (defined $Objects[$obj]{properties}{8});
+			my $verb	= $name."Verb";
+			#Try to name the action and object if they are unnamed, and see if we changed anything
+			my $action_rename			= 0;
+			my $object_rename			= 0;
+			$Translate_Action[$action]	= $name unless defined $Translate_Action[$action];
+			$Translate_Object[$obj]		= $verb unless defined $Translate_Object[$obj];
+			$action_rename				= 1 	unless $name eq $Translate_Action[$action];
+			$object_rename				= 1		unless $verb eq $Translate_Object[$obj];
+			#Log the results as needed
+			if ($Option_Verbose || $action_rename || $object_rename){
+				print $File_Log "\t$action\tObj$obj\n";	#Print location intro
+				print $File_Log	"\t\tAction: $name"				if $action_rename || $Option_Verbose;
+				print $File_Log "\t -> ".nameAction($action)	if $action_rename;
+				print $File_Log	"\n"							if $action_rename || $Option_Verbose;
+				print $File_Log	"\t\tObject: $verb"				if $object_rename || $Option_Verbose;
+				print $File_Log "\t -> ".nameObject($obj)		if $object_rename;
+				print $File_Log	"\n"							if $object_rename || $Option_Verbose;
+			}
+			#Contains one or more templates for prepositions
+			my $templates	= ord(substr($data, 0));
+			for (my $i=0 ; $i < $templates ; $i++) {
+				#Read identifiers for template
+				my $prep_obj	= unpack('S', substr($data, $i * 16 + 1, 2));	# Preposition object
+				my $ver_io_prop	= unpack('S', substr($data, $i * 16 + 3, 2));	# IndrectObject verify property
+				my $exc_io_prop	= unpack('S', substr($data, $i * 16 + 5, 2));	# IndrectObject execute property
+				my $ver_do_prop	= unpack('S', substr($data, $i * 16 + 7, 2));	# DirectObject verify property
+				my $exc_do_prop	= unpack('S', substr($data, $i * 16 + 9, 2));	# DirectObject execute property
+				#5 extra bytes at the end, which seems to be at least in part flag data.
+				#Try to rename the preposition object
+				unless ($prep_obj eq 65535){ #Null-value
+					my $prep						= uniformName(propertyString($prep_obj, 8));
+					my $prep_rename					= 0;
+					$Translate_Object[$prep_obj]	= $prep unless defined $Translate_Object[$prep_obj];
+					$prep_rename					= 1		unless $prep eq $Translate_Object[$prep_obj];
+					print $File_Log	"\t\tPrepObj: $prep"			if $prep_rename || $Option_Verbose;
+					print $File_Log "\t -> ".nameObject($prep)		if $prep_rename;
+					print $File_Log	"\n"							if $prep_rename || $Option_Verbose;
+				}
+				#TODO: Update the io/do properties
+			}
+			$action++;
+		}
+
+	}
+}
+#Convert text into uniform naming without spaces or quotes
+sub uniformName($){
+	my $text	= lc(shift);				# Lower case
+	$text		=~ s/\s+/ /;				# Convert all whitespace to spaces, and trim multiples
+	$text		=~ s/['\"]|^\s+|\s+$//g;	# Trim all '" and leading/trailing whitespace
+	$text		=~ s/ (.)/uc($1)/ge;		# Remove spaces, capitalizing the next letter
+	return $text;
+}
+#Converts a property of a given object to a string
+sub propertyString($$){
+	my $obj		= shift;
+	my $prop	= shift;
+	die "propertyString needs both Object and Property id"		unless defined $obj && defined $prop;
+	die "Can't access property $prop on undefined object $obj"	unless defined $Objects[$obj];
+	my $type	= $Objects[$obj]{properties}{$prop}{type};
+	my $data	= $Objects[$obj]{properties}{$prop}{data};
+	unless (defined $type && defined $data) {
+		warn "Unable to convert Obj$obj.Prop$prop to string; missing type or data";
+		return 'Obj$obj.Prop$prop (ERROR)';
+	}
+	#Hand over the working to the decoding function
+	return decodeProperty($type, $data);
+}
+#Converts an array into a comma-separated string with an optional value delimiter
+sub arrayString($;$){
+	my $listref		= shift;
+	my $delimiter	= shift;
+	$delimiter		= '' unless defined $delimiter;
+	my @list		= @{$listref};
+	my $text = '';
+	for my $i (0 .. $#list) {
+		$text	.= ', ' if $i > 0;
+		$text	.= $delimiter . $list[$i] . $delimiter;
+	}
+	return $text;
+}
+
+##Decoding
+#Decode a property given it's type; lists need to be interpreted recursively
+sub decodeProperty($$);
+sub decodeProperty($$) {
+	my $type	= shift;
+	my $data	= shift;
+	#Default value is the name of the property; This covers:
+	# 4	BASEPTR
+	# 5	NIL		type is the same as value
+	# 6	CODE	Code is too long to print; use decodeCode for detailed code breakdown
+	# 8	TRUE	type is the same as value
+	#11	TPL
+	#14	DEMAND
+	#15	SYNONYM
+	#16	REDIR
+	#17	TPL2
+	my $text	= namePropertyType($type);
+	if (namePropertyType($type) eq 'number')	{ $text	= unpack('l', $data) }							# 1
+	if (namePropertyType($type) eq 'object')	{ $text	= objectName(unpack('S', $data)) }				# 2
+	if (namePropertyType($type) eq 's-string')	{ $text	= "'".substr($data, 2)."'" }					# 3
+	if (namePropertyType($type) eq 'd-string')	{ $text	= '"'.substr($data, 2).'"' }					# 9
+	if (namePropertyType($type) eq 'fnaddr')	{ $text	= '&'.objectName(unpack('S', $data)) }			# 10
+	if (namePropertyType($type) eq 'property')	{ $text	= propertyName(unpack('S', $data)) }			# 13
+	#Lists (7) require some special handling, as they are recursive
+	if (namePropertyType($type) eq 'list'){
+		#Only the total size is given; each entry has to be read sequentially from the start.
+		my @entries;
+		my $size	= unpack('S', substr($data, 0, 2));
+		my $pos		= 2;
+		while ($pos < $size){
+			my $entry_type	=	ord(substr($data, $pos));
+			my $entry_data;
+			my $entry_size;
+			$pos++;	# Adjust for typecode
+			if 		(namePropertyType($type) eq 'number') {
+				#Fixed 1 + 4 byte size
+				$entry_data	= substr($data, $pos, 4);
+				$entry_size	= 4;
+			}
+			elsif (	namePropertyType($type) eq 'object'
+				||	namePropertyType($type) eq 'fnaddr'
+				||	namePropertyType($type) eq 'property') {
+				#Fixed 1 + 2 byte size
+				$entry_data	= substr($data, $pos, 2);
+				$entry_size	= 2;
+			}
+			elsif (	namePropertyType($type) eq 'nil'
+				||	namePropertyType($type) eq 'true') {
+				#Fixed 1 + 0 byte size
+				$entry_size	= 0;
+			}
+			elsif (	namePropertyType($type) eq 's-string'
+				||	namePropertyType($type) eq 'd-string'
+				||	namePropertyType($type) eq 'list') {
+				#Variable size;
+				#We need to peek into the element to find the size;
+				#Remember to *not* chop off the size
+				$entry_size 	= unpack('S', substr($data, $pos, 2));
+				$entry_data		= substr($data, $pos, $entry_size);
+			}
+			else {
+				die "Illegal list entry: ".namePropertyType($entry_type)." ($entry_type)";
+			}
+			$pos 	+= $entry_size; 
+			push @entries, decodeProperty($entry_type, $entry_data);
+		}
+		$text = "[".arrayString(\@entries)."]";
+	}
+	return $text;
 }
 ##Main Program Loop
 #Parse command-line arguments
@@ -822,7 +1002,7 @@ for (;;) {
 		$FileName_Mapping	= $ARGV[1];
 		splice(@ARGV, 0, 2);
 	}
-	elsif	($#ARGV >= 0 && $ARGV[0] eq '+s') {		# Create symbol  file template
+	elsif	($#ARGV >= 0 && $ARGV[0] eq '+s') {		# Create symbol file template
 		$Option_Generate	= 1;
 		splice(@ARGV, 0, 1);
 	}
@@ -877,7 +1057,7 @@ parseFile();									# Parse the input file into the local data structures
 close($File_Input);
 preloadMapping();								# Load mapping defaults
 parseMapping() if defined $FileName_Mapping;	# Read symbol file if called for
-#TODO: Analyze the game file
+analyze();
 generateMapping() if $Option_Generate;			# Generate symbol file if called for
 
 #TODO: Generate source code
