@@ -11,16 +11,16 @@ my $Decompiler_Version		= 0.5;
 
 ##Global variables##
 #File handling
-my $FileName_Input;		# Filename for the compiled gamefile to decompile
-my $FileName_Mapping;	# Filename for the mapping/translation file, if any.
-my $FileName_Generate;	# Filename for the generated mapping file
-my $FileName_Path;		# Path to place output files in
-my $FileName_Output;	# Filename for the resulting sourcecode
-my $FileName_Log;		# Filename for the decompilation log
-my $File_Input;			# File handle for input compiled gamefile
-my $File_Mapping;		# File handle for name mapping
-my $File_Output;		# File handle for output decompiled sourcecode
-my $File_Log;			# File handle for logging output
+my $FileName_Bytecode;		# Filename for the compiled gamefile to decompile
+my $FileName_Mapping;		# Filename for the mapping/translation file, if any.
+my $FileName_Generate;		# Filename for the generated mapping file
+my $FileName_Path;			# Path to place output files in
+my $FileName_SourceCode;	# Filename for the resulting sourcecode
+my $FileName_Log;			# Filename for the decompilation log
+my $File_ByteCode;			# File handle for input compiled gamefile
+my $File_Mapping;			# File handle for name mapping
+my $File_SourceCode;		# File handle for output decompiled sourcecode
+my $File_Log;				# File handle for logging output
 
 #Option handling
 my $Option_Minimal;		# Skip output directory and embedded resources
@@ -434,19 +434,19 @@ sub debug($;$){
 ##Parsing
 sub parseHeader(){
 	#The header is 48 bytes long
-	#	 0-10	File header signature
-	#	11-12	Reserved but unused (?)
-	#	13-18	Compiler version (?)
-	#	19-20	Flags
-	#	   21	Unknown
-	#	22-45	Build date
-	#	46-47	Unknown
+	# 0-10	File header signature
+	#11-12	Reserved but unused (?)
+	#13-18	Compiler version (?)
+	#19-20	Flags
+	#   21	Unknown
+	#22-45	Build date
+	#46-47	Unknown
 	my $block_header;
-	my $bytes_read = read ($File_Input, $block_header, $Size_Header);
-	die "Unable to read file header." unless $bytes_read eq $Size_Header;
+	my $bytes_read = read ($File_ByteCode, $block_header, $Size_Header);
+	die "Unable to read file header" unless $bytes_read eq $Size_Header;
 	#Check the signature
 	my $signature	= substr($block_header, 0, $Size_Signature);
-	die "$FileName_Input is not a valid TADS file."
+	die "$FileName_Bytecode is not a valid TADS file."
 		unless	$signature eq $Signature_TADS2_Game
 			||	$signature eq $Signature_TADS2_Res;
 	#Parse the rest of the header
@@ -467,7 +467,7 @@ sub parseHeader(){
 	$Flags_CaseFolding		=	$flags & 64;
 	$Flags_NewStyleLine		=	$flags & 128;
 	#Write to log
-	print $File_Log "Decompiler v$Decompiler_Version on $FileName_Input ";
+	print $File_Log "Decompiler v$Decompiler_Version on $FileName_Bytecode ";
 	print $File_Log "(a TADS2-Game file)\n"		if $signature eq $Signature_TADS2_Game;
 	print $File_Log "(a TADS2-Resource file)\n"	if $signature eq $Signature_TADS2_Res;
 	print $File_Log "Compiled by $version at $timestamp\n";
@@ -493,16 +493,16 @@ sub parseFile(){
 		my $next_block;	# 4 bytes; location of the next block.
 		my $block_size;
 		my $block;
-		read ($File_Input, $size_type, 1);
-		read ($File_Input, $block_type, unpack('C', $size_type));
-		read ($File_Input, $next_block, 4);
-		$block_size	= unpack('L', $next_block) - tell($File_Input);
+		read ($File_ByteCode, $size_type, 1);
+		read ($File_ByteCode, $block_type, unpack('C', $size_type));
+		read ($File_ByteCode, $next_block, 4);
+		$block_size	= unpack('L', $next_block) - tell($File_ByteCode);
 		#Log the block type, and break out at the end of the file.
 		print $File_Log "$block_type: $block_size bytes\n";
 		last unless $block_size;
 		last if	$block_type eq '$EOF';
 		#read the contents of the block and parse it
-		read ($File_Input, $block, $block_size);
+		read ($File_ByteCode, $block, $block_size);
 		if	($block_type eq 'XSI')		{ parseBlockXSI($block) }		# XOR Seed Information
 		if	($block_type eq 'OBJ')		{ parseBlockOBJ($block) }		# OBJects
 		#FST	Fast load information; does not contain anything useful for decompilation
@@ -1059,7 +1059,7 @@ sub arrayString($;$){
 	my $listref		= shift;
 	my $delimiter	= shift;
 	$delimiter		= '' unless defined $delimiter;
-	my @list		= @{$listref};
+	my @list		= @{ $listref };
 	my $text = '';
 	for my $i (0 .. $#list) {
 		$text	.= ', ' if $i > 0;
@@ -1158,26 +1158,26 @@ for (;;) {
 	}
 	else { last }
 }
-$FileName_Input	= $ARGV[0];	# There should be only one argument left, giving the name of the file to parse.
+$FileName_Bytecode	= $ARGV[0];	# There should be only one argument left, giving the name of the file to parse.
 die "Use: tads2 [options] file.taf\n$Options" if ($#ARGV != 0);	# Too many unparsed arguments
 
 #Determine names to use
 $FileName_Path	= './';	# Default to no directory
 if ($ARGV[0] =~ m/([\w\s]*)\.gam/i){	# Use the name of the input file if possible
-	$FileName_Path		= $1 . '/'		unless defined $Option_Minimal;
-	$FileName_Generate	= $1 . '.sym'	if defined $Option_Generate;
-	$FileName_Output	= $1 . '.t';
-	$FileName_Log		= $1 . '.log';
+	$FileName_Path			= $1 . '/'		unless defined $Option_Minimal;
+	$FileName_Generate		= $1 . '.sym'	if defined $Option_Generate;
+	$FileName_SourceCode	= $1 . '.t';
+	$FileName_Log			= $1 . '.log';
 }
 else{
-	$FileName_Path		= 'decoded/'	unless defined $Option_Minimal;
-	$FileName_Output	= 'source.t';
-	$FileName_Log		= 'decompile.log';
-	$FileName_Generate	= $1 . '.sym'	if defined $Option_Generate;
+	$FileName_Path			= 'decoded/'	unless defined $Option_Minimal;
+	$FileName_SourceCode	= 'source.t';
+	$FileName_Log			= 'decompile.log';
+	$FileName_Generate		= $1 . '.sym'	if defined $Option_Generate;
 }
 
 #Some sanity checking
-die "$FileName_Input is not a valid file"	unless -f $FileName_Input;
+die "$FileName_Bytecode is not a valid file"	unless -f $FileName_Bytecode;
 die "Overwriting existing symbol file with autogenerated is not supported in minimal mode"
 	if defined $FileName_Generate && $Option_Minimal && -e $FileName_Generate ;
 
@@ -1186,24 +1186,24 @@ mkdir $FileName_Path						unless -e $FileName_Path;
 die "$FileName_Path is not a valid path"	unless -d $FileName_Path;
 
 #Open file handles
-open($File_Input, "< :raw :bytes", $FileName_Input)
-	|| die("Couldn't open $FileName_Input for reading.");
 open($File_Log, "> :raw :bytes :unix", $FileName_Path . $FileName_Log) # Use :unix to flush the log as we write to it
 	|| die "$0: can't open " . $FileName_Path . $FileName_Log . " for writing: $!";
-open($File_Output, "> :raw :bytes", $FileName_Path . $FileName_Output)
-	|| die "$0: can't open " . $FileName_Path . $FileName_Output . "for writing: $!";
 
 #Process the game archive
+open($File_ByteCode, "< :raw :bytes", $FileName_Bytecode)
+	|| die("Couldn't open $FileName_Bytecode for reading.");
 parseHeader();									# Read header and determine version/type of file
 parseFile();									# Parse the input file into the local data structures
-close($File_Input);
+close($File_ByteCode);
 preloadMapping();								# Load mapping defaults
 parseMapping() if defined $FileName_Mapping;	# Read symbol file if called for
 analyze();
 generateMapping() if $Option_Generate;			# Generate symbol file if called for
 
 #TODO: Generate source code
+open($File_SourceCode, "> :raw :bytes", $FileName_Path . $FileName_SourceCode)
+	|| die "$0: can't open " . $FileName_Path . $FileName_SourceCode . "for writing: $!";
 
 #Close file output
-close($File_Output);
+close($File_SourceCode);
 close($File_Log);
