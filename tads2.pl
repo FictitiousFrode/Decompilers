@@ -1,13 +1,16 @@
-use strict;			# 'Safest' operation level
-use warnings;		# Give warnings
+use strict;					# 'Safest' operation level
+use warnings;				# Give warnings
+use File::Basename;			# Interpreting resource filenames
+use File::Path 'make_path';	# Creating directories for resources
 
 ##Version History
-my $Decompiler_Version		= 0.5;
+my $Decompiler_Version		= 0.6;
 #v0.1:	Initial structure for flow and storage
 #v0.2:	Parsing of data blocks (Headers + XSI/OBJ/RES)
 #v0.3:	Generation and parsing of symbol file
 #v0.4:	Verbose mode implementation, parsing of VOC/CMPD/FMTSTR
-#v0.5:	Action analyzis and property decoding
+#v0.5:	Action analyzis and property decoding; working resource paths
+#v0.6:	Basic source printing, vocabulary analysis
 
 ##Global variables##
 #File handling
@@ -15,18 +18,21 @@ my $FileName_Bytecode;		# Filename for the compiled gamefile to decompile
 my $FileName_Mapping;		# Filename for the mapping/translation file, if any.
 my $FileName_Generate;		# Filename for the generated mapping file
 my $FileName_Path;			# Path to place output files in
-my $FileName_SourceCode;	# Filename for the resulting sourcecode
+my $FileName_Sourcecode;	# Filename for the resulting sourcecode
 my $FileName_Log;			# Filename for the decompilation log
-my $File_ByteCode;			# File handle for input compiled gamefile
+my $File_Bytecode;			# File handle for input compiled gamefile
 my $File_Mapping;			# File handle for name mapping
-my $File_SourceCode;		# File handle for output decompiled sourcecode
+my $File_Sourcecode;		# File handle for output decompiled sourcecode
 my $File_Log;				# File handle for logging output
 
 #Option handling
 my $Option_Minimal;		# Skip output directory and embedded resources
 my $Option_Generate;	# Generate a new symbol file
 my $Option_Verbose;		# Extra information dumped to story file
+my $Option_Naming;		# Be extra aggressive on trying to determine names
+						# TODO: This will create duplicate names, remake to avoid that
 my $Options	= "Available Options:\n";
+$Options	.= "-a\t\tAggressive naming: Try extra hard to find object names\n";
 $Options	.= "-m\t\tMinimalist mode: Skip resources and output directory\n";
 $Options	.= "-s [file]:\tSymbol file: Parse the file for symbol mappings\n";
 $Options	.= "+s\t\tGenerate symbol file: Store symbol mapping in output directory\n";
@@ -71,6 +77,8 @@ my $Flags_Precompiled;		# writing precompiled header
 my $Flags_Fastload;			# fast-load records are in file
 my $Flags_CaseFolding;		# case folding was turned on in original compile
 my $Flags_NewStyleLine;		# new-style line records
+my $Timestamp_Image;		# Timestamp for when the image was written, for comparison
+my $Version_Image;			# Version of the image file
 
 #Game Contents
 my @Objects 			= ();	# Array of hash-map representing the decompiled objects
@@ -442,7 +450,7 @@ sub parseHeader(){
 	#22-45	Build date
 	#46-47	Unknown
 	my $block_header;
-	my $bytes_read = read ($File_ByteCode, $block_header, $Size_Header);
+	my $bytes_read = read ($File_Bytecode, $block_header, $Size_Header);
 	die "Unable to read file header" unless $bytes_read eq $Size_Header;
 	#Check the signature
 	my $signature	= substr($block_header, 0, $Size_Signature);
@@ -450,13 +458,13 @@ sub parseHeader(){
 		unless	$signature eq $Signature_TADS2_Game
 			||	$signature eq $Signature_TADS2_Res;
 	#Parse the rest of the header
-	my $unknown1	= unpack('S', substr($block_header, 11, 2));	# substr($block_header, 11, 2);
-	my $version		= substr($block_header, 13, 6);
-	my $flags		= unpack('n', substr($block_header, 19, 2));	# Flags are stored as a bitmap, so read in as big-endian UINT-16
-#	my $flags		= unpack('C', substr($block_header, 20, 1));	# Flags might be stored only in byte 19 though...
-	my $unknown2	= unpack('C', substr($block_header, 21, 1));	# substr($block_header, 21, 1);
-	my $timestamp	= substr($block_header, 22, 24);
-	my $unknown3	= unpack('S', substr($block_header, 46, 2));	# substr($block_header, 46, 2);
+	my $unknown1		= unpack('S', substr($block_header, 11, 2));	# substr($block_header, 11, 2);
+	$Version_Image		= substr($block_header, 13, 6);
+	my $flags			= unpack('n', substr($block_header, 19, 2));	# Flags are stored as a bitmap, so read in as big-endian UINT-16
+#	my $flags			= unpack('C', substr($block_header, 20, 1));	# Flags might be stored only in byte 19 though...
+	my $unknown2		= unpack('C', substr($block_header, 21, 1));	# substr($block_header, 21, 1);
+	$Timestamp_Image	= substr($block_header, 22, 24);
+	my $unknown3		= unpack('S', substr($block_header, 46, 2));	# substr($block_header, 46, 2);
 	#Parse Flags
 	$Flag_SymbolTable		=	$flags & 1;
 	$Flags_SourceTracking	=	$flags & 2;
@@ -470,7 +478,7 @@ sub parseHeader(){
 	print $File_Log "Decompiler v$Decompiler_Version on $FileName_Bytecode ";
 	print $File_Log "(a TADS2-Game file)\n"		if $signature eq $Signature_TADS2_Game;
 	print $File_Log "(a TADS2-Resource file)\n"	if $signature eq $Signature_TADS2_Res;
-	print $File_Log "Compiled by $version at $timestamp\n";
+	print $File_Log "Compiled by $Version_Image at $Timestamp_Image\n";
 	print $File_Log "\tUnknown 1: $unknown1\n"	if $Option_Verbose;
 	print $File_Log "\tUnknown 2: $unknown2\n"	if $Option_Verbose;
 	print $File_Log "\tUnknown 3: $unknown3\n"	if $Option_Verbose;
@@ -493,16 +501,16 @@ sub parseFile(){
 		my $next_block;	# 4 bytes; location of the next block.
 		my $block_size;
 		my $block;
-		read ($File_ByteCode, $size_type, 1);
-		read ($File_ByteCode, $block_type, unpack('C', $size_type));
-		read ($File_ByteCode, $next_block, 4);
-		$block_size	= unpack('L', $next_block) - tell($File_ByteCode);
+		read ($File_Bytecode, $size_type, 1);
+		read ($File_Bytecode, $block_type, unpack('C', $size_type));
+		read ($File_Bytecode, $next_block, 4);
+		$block_size	= unpack('L', $next_block) - tell($File_Bytecode);
 		#Log the block type, and break out at the end of the file.
 		print $File_Log "$block_type: $block_size bytes\n";
 		last unless $block_size;
-		last if	$block_type eq '$EOF';
 		#read the contents of the block and parse it
-		read ($File_ByteCode, $block, $block_size);
+		if	($block_type eq '$EOF')		{ last }						# End of file marker; usually not reached due to negative size
+		read ($File_Bytecode, $block, $block_size);
 		if	($block_type eq 'XSI')		{ parseBlockXSI($block) }		# XOR Seed Information
 		if	($block_type eq 'OBJ')		{ parseBlockOBJ($block) }		# OBJects
 		#FST	Fast load information; does not contain anything useful for decompilation
@@ -632,7 +640,6 @@ sub parseBlockFMTSTR($){
 		my $size	= unpack('S', substr($block, $pos + 2, 2));
 		my $text	= substr($block, $pos + 4, $size - 2);
 		$pos		+= 2 + $size;
-		#TODO: Parse the text into a name for the property
 		my $prep_rename;
 		my $prep_name					= uniformName('fmt '.$text);
 		$Translate_Property[$prop]		= $prep_name unless defined $Translate_Property[$prop];
@@ -803,6 +810,7 @@ sub parseBlockRES($) {
 	# 4 Bytes: Offset to where data begins
 	my $entries	= unpack('L', substr($block, 0, 4));
 	my $offset	= unpack('L', substr($block, 4, 4));
+	print $File_Log "\t$entries Entries\n";
 	#Read metadata and embedded data for each entry in one pass
 	my $pos		= 8;
 	for my $i (1 .. $entries){
@@ -815,7 +823,8 @@ sub parseBlockRES($) {
 		print $File_Log "\t$name ($size bytes) at $data_pos\n";
 		#Embedded data, only read when not in minimal mode
 		unless ($Option_Minimal){
-			#TODO: Make directory
+			my $path = $FileName_Path.(dirname $name);
+			make_path($path);
 			my $file_resource;
 			open($file_resource, "> :raw :bytes", $FileName_Path . $name)
 				|| die "$0: can't open ".$FileName_Path . $name . " in write-open mode: $!";
@@ -826,8 +835,13 @@ sub parseBlockRES($) {
 }
 ##Analyzing
 sub analyze(){
+	#Look for action definitions, and use those to name the related actions, objects and properties
 	print $File_Log "Analyzing Actions\n";
 	analyzeActions();
+	#Look through the vocabulary and try to use that to name objects.
+	#We do this after actions because the action naming often gives better results.
+	print $File_Log "Analyzing Vocabulary\n";
+	analyzeVocabulary();
 	print $File_Log "Analyzing Function Code Segments\n";
 	analyzeFunctionCode();
 	print $File_Log "Analyzing Property Code Segments\n";
@@ -897,7 +911,7 @@ sub analyzeActions(){
 				my $prep_name;
 				my $subheader_needed	= 1;
 				unless ($prep_obj eq $Null_Value){ #Null-value
-					$prep_name						= uniformName(propertyString($prep_obj, 8));
+					$prep_name						= uniformName(propertyString($prep_obj, 8) . ' Prep');
 					$Translate_Object[$prep_obj]	= $prep_name unless defined $Translate_Object[$prep_obj];
 					my $prep_rename;
 					$prep_rename					= 1		unless $prep_name eq $Translate_Object[$prep_obj];
@@ -917,7 +931,7 @@ sub analyzeActions(){
 					my $ver_io_rename;
 					$ver_io_rename						= 1		unless $ver_io_name eq $Translate_Property[$ver_io_prop];
 					print $File_Log "\t$action\tObj$obj\n"						if $ver_io_rename && $header_needed;
-					print $File_Log	"\t\t$prep_name:\n"							if $subheader_needed && not $prep_obj eq $Null_Value
+					print $File_Log	"\t\t$prep_name:\n"							if $subheader_needed && $prep_obj != $Null_Value
 																					&& ($ver_io_rename || $Option_Verbose);
 					print $File_Log	"\t\tNoPrep:\n"								if $subheader_needed && $prep_obj eq $Null_Value
 																					&& ($ver_io_rename || $Option_Verbose);
@@ -936,7 +950,7 @@ sub analyzeActions(){
 					my $exc_io_rename;
 					$exc_io_rename						= 1		unless $exc_io_name eq $Translate_Property[$exc_io_prop];
 					print $File_Log "\t$action\tObj$obj\n"						if $exc_io_rename && $header_needed;
-					print $File_Log	"\t\t$prep_name:\n"							if $subheader_needed && not $prep_obj eq $Null_Value
+					print $File_Log	"\t\t$prep_name:\n"							if $subheader_needed && $prep_obj != $Null_Value
 																					&& ($exc_io_rename || $Option_Verbose);
 					print $File_Log	"\t\tNoPrep:\n"								if $subheader_needed && $prep_obj eq $Null_Value
 																					&& ($exc_io_rename || $Option_Verbose);
@@ -956,7 +970,7 @@ sub analyzeActions(){
 					my $ver_do_rename;
 					$ver_do_rename						= 1		unless $ver_do_name eq $Translate_Property[$ver_do_prop];
 					print $File_Log "\t$action\tObj$obj\n"						if $ver_do_rename && $header_needed;
-					print $File_Log	"\t\t$prep_name:\n"							if $subheader_needed && not $prep_obj eq $Null_Value
+					print $File_Log	"\t\t$prep_name:\n"							if $subheader_needed && $prep_obj != $Null_Value
 																					&& ($ver_do_rename || $Option_Verbose);
 					print $File_Log	"\t\tNoPrep:\n"								if $subheader_needed && $prep_obj eq $Null_Value
 																					&& ($ver_do_rename || $Option_Verbose);
@@ -976,7 +990,7 @@ sub analyzeActions(){
 					my $exc_do_rename;
 					$exc_do_rename						= 1		unless $exc_do_name eq $Translate_Property[$exc_do_prop];
 					print $File_Log "\t$action\tObj$obj\n"						if $exc_do_rename && $header_needed;
-					print $File_Log	"\t\t$prep_name:\n"							if $subheader_needed && not $prep_obj eq $Null_Value
+					print $File_Log	"\t\t$prep_name:\n"							if $subheader_needed && $prep_obj != $Null_Value
 																					&& ($exc_do_rename || $Option_Verbose);
 					print $File_Log	"\t\tNoPrep:\n"								if $subheader_needed && $prep_obj eq $Null_Value
 																					&& ($exc_do_rename || $Option_Verbose);
@@ -990,6 +1004,48 @@ sub analyzeActions(){
 			$action++;
 		}
 
+	}
+}
+#Look through the vocabulary of each object to see if we find a suitable name
+sub analyzeVocabulary(){
+	#There are four properties we use for naming:
+	#2: Verb
+	#3: Noun
+	#4: Adjective
+	#5: Preposition
+	#Each can have several string tokens associated, so we take the longest one
+	for my $obj (0 .. $#Objects) {
+		#Not all Object ID's are actually used
+		next unless defined $Objects[$obj];
+		#Not all objects have vocabulary
+#		next unless defined $Objects[$obj]{vocabulary};
+		my $name;
+		#First priority is to use the verb
+		my $verb_token;
+		$verb_token	= bestVocabularyToken($obj, 2, 1)		unless defined $name;
+		$name		= uniformName($verb_token . " Verb")	if defined $verb_token;
+		#Second priority is to use the preposition
+		my $prep_token;
+		$prep_token	= bestVocabularyToken($obj, 5, 1)		unless defined $name;
+		$name		= uniformName($prep_token . " Prep")	if defined $prep_token;
+		#Try to use the adjective and noun, if we are aggressive on name search
+		if ($Option_Naming && not defined $name){
+			my $token_noun;
+			$token_noun	= bestVocabularyToken($obj, 3, 1);
+			my $token_adj;
+			$token_adj	= bestVocabularyToken($obj, 4, 1);
+			$token_adj	= ''	unless defined $token_adj;
+			$name	= uniformName($token_adj . ' ' . $token_noun)	if defined $token_noun;
+		}
+		#No naming alternatives available
+		next unless defined $name;
+		
+		my $rename;
+		$Translate_Object[$obj]	= $name unless defined $Translate_Object[$obj];
+		$rename					= 1		unless $name eq $Translate_Object[$obj];
+		print $File_Log	"\tObj$obj: $name"			if $rename || $Option_Verbose;
+		print $File_Log "\t -> ".nameObject($obj)	if $rename;
+		print $File_Log	"\n"						if $rename || $Option_Verbose;
 	}
 }
 #Look through all objects, analyzing the code segments of function objects
@@ -1030,6 +1086,30 @@ sub analyzePropertyCode(){
 		}
 	}
 }
+#Find the best (currently: longest) vocabulary token for an object, with optional recursion
+sub bestVocabularyToken($$;$);
+sub bestVocabularyToken($$;$){
+	my $obj		= shift;
+	my $voc		= shift;
+	my $recurse	= shift;
+	my $best_token;
+	if	(defined $Objects[$obj]{vocabulary}{$voc}){
+		my @tokens	= @{ $Objects[$obj]{vocabulary}{$voc} };
+		foreach my $token (@tokens){
+			$best_token = $token unless defined $best_token && length($best_token)>length($token);
+		}
+	}
+	#Only look recursively if we don't have a token yet
+	if ($recurse && not defined $best_token){
+		my @parents	= ();
+		@parents	= @{ $Objects[$obj]{superclass} } if defined $Objects[$obj]{superclass};
+		foreach my $parent (@parents) {
+			my $token = bestVocabularyToken($parent, $voc, $recurse+1);
+			$best_token = $token unless defined $best_token && defined $token && length($best_token) > length($token);
+		}
+	}
+	return $best_token;
+}
 #Convert text into uniform naming without spaces or quotes
 sub uniformName($){
 	my $text	= lc(shift);				# Lower case
@@ -1067,6 +1147,75 @@ sub arrayString($;$){
 	}
 	return $text;
 }
+##Output
+#Generate and print the corresponding TADS source code
+sub printSource(){
+	print $File_Sourcecode "//Source generated by v$Decompiler_Version of tads2 decompiler by Fictitious Frode\n";
+	print $File_Sourcecode "//Based on $FileName_Bytecode compiled by $Version_Image at $Timestamp_Image\n";
+	#TODO: formatstrings
+	#TODO: compoundwords
+	#TODO: specialwords
+	#Handle objects, one type at a time
+	print $File_Sourcecode "\n//\t## Functions ##\n";
+	for my $obj (0 .. $#Objects) {
+		next unless( defined $Objects[$obj]);	#Not all objects are used
+		my $type	= $Objects[$obj]{type};
+		printFunctionSource($obj)	if ($type eq 1);	# Functions
+	}
+	print $File_Sourcecode "\n//\t## Objects ##\n";
+	for my $obj (0 .. $#Objects) {
+		next unless( defined $Objects[$obj]);	#Not all objects are used
+		my $type	= $Objects[$obj]{type};
+		printObjectSource($obj)		if ($type eq 2);	# Meta-Objects
+	}
+}
+#Generate and print the source for a function object 
+sub printFunctionSource($){
+	my $obj	= shift;
+	#Function header
+	print $File_Sourcecode nameObject($obj) . ": function";
+	#TODO: Arguments
+	print $File_Sourcecode "{\n";
+	#Decode information
+	print $File_Sourcecode	"\t//\tObj$obj\t = '".nameObject($obj)."'\n";
+	#TODO: Function code
+	print $File_Sourcecode "\tTODO Code for function}\n";
+	print $File_Sourcecode "}\n";
+}
+#Generate and print the source for a meta-object 
+sub printObjectSource($){
+	my $obj	= shift;
+	#Object header
+	print $File_Sourcecode 'class ' if $Objects[$obj]{flags}{isClass};
+	print $File_Sourcecode nameObject($obj) . ': ';
+	if (defined $Objects[$obj]{superclass}) {
+		my @parents	= @{ $Objects[$obj]{superclass} };
+		for my $i (0 .. $#parents) {
+			print $File_Sourcecode ', ' if $i > 0;
+			print $File_Sourcecode nameObject($parents[$i]);
+		}
+	}
+	else {
+		print $File_Sourcecode 'object';
+	}
+	print $File_Sourcecode "\n";
+	#Decode information
+	print $File_Sourcecode	"\t//\tObj$obj\t = '".nameObject($obj)."'\n";
+	#Vocabulary properties
+	if (defined $Objects[$obj]{vocabulary}) {
+		my $count = keys %{ $Objects[$obj]{vocabulary} };
+		print $File_Sourcecode "\t// $count vocabulary items\n";
+		for my $id ( sort {$a <=> $b} keys %{ $Objects[$obj]{vocabulary} } ) {
+			print $File_Sourcecode "\t"
+				. nameProperty($id)
+				. "\t= "
+				. arrayString($Objects[$obj]{vocabulary}{$id}, "'")
+				. "\n";
+		}
+	}
+
+}
+
 ##Decoding
 #Decode a property given it's type; lists need to be interpreted recursively
 sub decodeProperty($$);
@@ -1148,6 +1297,10 @@ for (;;) {
 		$Option_Generate	= 1;
 		splice(@ARGV, 0, 1);
 	}
+	elsif($#ARGV >= 0 && $ARGV[0] eq '-a'){			# Aggressive naming
+		$Option_Naming		= 1;
+		splice(@ARGV, 0, 1);
+	}
 	elsif($#ARGV >= 0 && $ARGV[0] eq '-v'){			# Verbose
 		$Option_Verbose		= 1;
 		splice(@ARGV, 0, 1);
@@ -1166,12 +1319,12 @@ $FileName_Path	= './';	# Default to no directory
 if ($ARGV[0] =~ m/([\w\s]*)\.gam/i){	# Use the name of the input file if possible
 	$FileName_Path			= $1 . '/'		unless defined $Option_Minimal;
 	$FileName_Generate		= $1 . '.sym'	if defined $Option_Generate;
-	$FileName_SourceCode	= $1 . '.t';
+	$FileName_Sourcecode	= $1 . '.t';
 	$FileName_Log			= $1 . '.log';
 }
 else{
 	$FileName_Path			= 'decoded/'	unless defined $Option_Minimal;
-	$FileName_SourceCode	= 'source.t';
+	$FileName_Sourcecode	= 'source.t';
 	$FileName_Log			= 'decompile.log';
 	$FileName_Generate		= $1 . '.sym'	if defined $Option_Generate;
 }
@@ -1190,20 +1343,20 @@ open($File_Log, "> :raw :bytes :unix", $FileName_Path . $FileName_Log) # Use :un
 	|| die "$0: can't open " . $FileName_Path . $FileName_Log . " for writing: $!";
 
 #Process the game archive
-open($File_ByteCode, "< :raw :bytes", $FileName_Bytecode)
+open($File_Bytecode, "< :raw :bytes", $FileName_Bytecode)
 	|| die("Couldn't open $FileName_Bytecode for reading.");
 parseHeader();									# Read header and determine version/type of file
 parseFile();									# Parse the input file into the local data structures
-close($File_ByteCode);
+close($File_Bytecode);
 preloadMapping();								# Load mapping defaults
 parseMapping() if defined $FileName_Mapping;	# Read symbol file if called for
 analyze();
 generateMapping() if $Option_Generate;			# Generate symbol file if called for
 
-#TODO: Generate source code
-open($File_SourceCode, "> :raw :bytes", $FileName_Path . $FileName_SourceCode)
-	|| die "$0: can't open " . $FileName_Path . $FileName_SourceCode . "for writing: $!";
+open($File_Sourcecode, "> :raw :bytes", $FileName_Path . $FileName_Sourcecode)
+	|| die "$0: can't open " . $FileName_Path . $FileName_Sourcecode . "for writing: $!";
+printSource();									# Print TADS source based on bytecode
 
 #Close file output
-close($File_SourceCode);
+close($File_Sourcecode);
 close($File_Log);
