@@ -32,10 +32,11 @@ my $Option_Verbose;		# Extra information dumped to story file
 my $Option_Naming;		# Be extra aggressive on trying to determine names
 						# TODO: This will create duplicate names, remake to avoid that
 my $Options	= "Available Options:\n";
-$Options	.= "-a\t\tAggressive naming: Try extra hard to find object names\n";
 $Options	.= "-m\t\tMinimalist mode: Skip resources and output directory\n";
-$Options	.= "-s [file]:\tSymbol file: Parse the file for symbol mappings\n";
+$Options	.= "-v\t\tVerbose: Extra information printed to log\n";
+$Options	.= "-a\t\tAggressive naming: Try extra hard to find names of objects and properties\n";
 $Options	.= "+s\t\tGenerate symbol file: Store symbol mapping in output directory\n";
+$Options	.= "-s [file]:\tSymbol file: Parse the file for symbol mappings\n";
 
 #TADS Constants
 my $Size_Header				= 48;
@@ -867,6 +868,9 @@ sub analyzeActions(){
 			}
 			#TPL2 contains the action defintions we are looking for
 			next unless namePropertyType($type) eq 'tpl2';
+			#Store a reference from the property to the action, for laster use
+			$Objects[$obj]{properties}{$prop}{action}	= $action;
+			#Extract and analyze data
 			my $data	= $Objects[$obj]{properties}{$prop}{data};
 			unless (defined $data) {
 				print $File_Log "\tUnable to analyze $obj.$prop - Missing data";
@@ -890,7 +894,7 @@ sub analyzeActions(){
 				my $verb_rename;
 				$action_rename				= 1 	unless $action_name eq $Translate_Action[$action];
 				$verb_rename				= 1		unless $verb_name eq $Translate_Object[$obj];
-				print $File_Log "\t$action\t$Obj$obj\n"			if ($verb_rename || $action_rename) && $header_needed;
+				print $File_Log "\t$action\tObj$obj\n"			if ($verb_rename || $action_rename) && $header_needed;
 				print $File_Log	"\t\tAction: $action_name"		if $action_rename || $Option_Verbose;
 				print $File_Log "\t -> ".nameAction($action)	if $action_rename;
 				print $File_Log	"\n"							if $action_rename || $Option_Verbose;
@@ -1188,7 +1192,7 @@ sub printSource(){
 	#TODO: formatstrings
 	#TODO: compoundwords
 	#TODO: specialwords
-	#Handle objects, one type at a time
+	#Print objects, one type at a time
 	print $File_Sourcecode "\n//\t## Functions ##\n";
 	for my $obj (0 .. $#Objects) {
 		next unless( defined $Objects[$obj]);	#Not all objects are used
@@ -1239,11 +1243,9 @@ sub printObjectSource($){
 		my $count = keys %{ $Objects[$obj]{vocabulary} };
 		print $File_Sourcecode "\t// $count vocabulary items\n"		if $count;
 		for my $voc ( sort {$a <=> $b} keys %{ $Objects[$obj]{vocabulary} } ) {
-			print $File_Sourcecode "\t"
-				. nameProperty($voc)
-				. "\t= "
-				. arrayString($Objects[$obj]{vocabulary}{$voc}, "'")
-				. "\n";
+			my $name	= nameProperty($voc);
+			my $tokens	= arrayString($Objects[$obj]{vocabulary}{$voc}, "'");
+			print $File_Sourcecode "\t$name\t= $tokens\n";
 		}
 	}
 	#Data properties
@@ -1254,11 +1256,11 @@ sub printObjectSource($){
 			my $prop_type	= $Objects[$obj]{properties}{$prop}{type};
 			my $prop_data	= $Objects[$obj]{properties}{$prop}{data};
 			unless (defined $prop_type ) {
-				warn "Undefined type for $obj.$prop (".objectName($obj).'.'.propertyName($prop).')';
+				warn "Undefined type for $obj.$prop (".nameObject($obj).'.'.nameProperty($prop).')';
 				next;
 			}
 			unless (defined $prop_data ) {
-				warn "Undefined data for $obj.$prop (".objectName($obj).'.'.propertyName($prop).')';
+				warn "Undefined data for $obj.$prop (".nameObject($obj).'.'.nameProperty($prop).')';
 				next;
 			}
 			if		(namePropertyType($prop_type) eq 'demand') {
@@ -1269,16 +1271,32 @@ sub printObjectSource($){
 				my $action_type		= substr(nameProperty($prop), 0, 2);
 				my $action_target	= nameAction($Property_Actions{$property_target});
 				my $action_this		= nameAction($Property_Actions{$prop});				
-				$action_type		= '//UNKNOWN ' unless $action_type eq 'do' || $action_type eq 'io';
-				print $File_Sourcecode "\t" . $action_type . "Synonym('$action_target')\t= '$action_this'\n";
+				undef $action_type	unless $action_type eq 'do' || $action_type eq 'io';
+				print $File_Sourcecode "\t" . $action_type . "Synonym('$action_target')\t= '$action_this'\n" if $action_type;
 			}
 			elsif	(namePropertyType($prop_type) eq 'redir') {
-				print $File_Sourcecode "\t"
-					.nameProperty($prop)."\t= Redir-TODO\n";
+				my $action_type		= substr(nameProperty($prop), 0, 2);
+				my $object_target	= nameObject(unpack('S', $prop_data));
+				my $name			= nameProperty($prop);
+				undef $action_type	unless $action_type eq 'do' || $action_type eq 'io';
+				print $File_Sourcecode "\t$name\t= $object_target\n" if $action_type;
 			}
 			elsif	(namePropertyType($prop_type) eq 'tpl2') {
-				print $File_Sourcecode "\t"
-					.nameProperty($prop)."\t= ActionDef-TODO\n";
+				my $templates	= ord(substr($prop_data, 0));
+				for (my $i=0 ; $i<$templates ; $i++) {
+					# Read relevant identifiers for template
+					my $prep_obj= unpack('S', substr($prop_data, $i * 16 + 1, 2)); # Object for preposition
+					my $exc_io	= unpack('S', substr($prop_data, $i * 16 + 5, 2)); # Property for IndrectObject execute
+					my $exc_do	= unpack('S', substr($prop_data, $i * 16 + 9, 2)); # Property for DirectObject execute
+					# Determine output
+					my $name		= nameAction($Objects[$obj]{properties}{$prop}{action});
+					my $act_type	= 'doAction';
+					my $prep		= '';
+					$act_type 		= 'ioAction' 						unless $Null_Value eq $exc_io;
+					$prep			= '(' . nameObject($prep_obj) . ')'	unless $Null_Value eq $prep_obj;
+					# Write output
+					print $File_Sourcecode "\t$prep\t= '$name'\n";
+				}
 			}
 			elsif	(namePropertyType($prop_type) eq 'code') {
 				print $File_Sourcecode "\t"
@@ -1287,10 +1305,9 @@ sub printObjectSource($){
 			else {
 				#Works for NUMBER, SSTRING, DSTRING, OBJECT, PROPNUM, FNADDR, NIL, TRUE, DAT_LIST
 				#Also covers BASEPTR and TPL which we don't know what to print for
-				print $File_Sourcecode "\t"
-					.nameProperty($prop)."\t= "
-					.propertyString($obj, $prop)
-					."\n";
+				my $name	= nameProperty($prop);
+				my $value	= propertyString($obj, $prop);
+				print $File_Sourcecode "\t$name\t= $value\n";
 			}
 			
 		}
