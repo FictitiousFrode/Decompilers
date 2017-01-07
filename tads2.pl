@@ -4,13 +4,15 @@ use File::Basename;			# Interpreting resource filenames
 use File::Path 'make_path';	# Creating directories for resources
 
 ##Version History
-my $Decompiler_Version		= 0.6;
+my $Decompiler_Version		= 0.7;
 #v0.1:	Initial structure for flow and storage
 #v0.2:	Parsing of data blocks (Headers + XSI/OBJ/RES)
 #v0.3:	Generation and parsing of symbol file
 #v0.4:	Verbose mode implementation, parsing of VOC/CMPD/FMTSTR
 #v0.5:	Action analyzis and property decoding; working resource paths
 #v0.6:	Basic source printing, vocabulary analysis
+#v0.7:	Code analysis: instruction set parsing
+#v0.8:	Code analysis: instruction printing
 
 ##Global variables##
 #File handling
@@ -47,26 +49,214 @@ my $Encryption_Seed			= 0x3f;
 my $Encryption_Increment	= 0x40;
 my $Null_Value				= 65535;
 
+my @Constant_Property_Type	= ();
+my @Constant_Opcode			= ();
+my @Constant_Opcode_Payload	= ();
+
 #Names corresponding to the property types
-sub namePropertyType($){
-	my $type = shift;
-	if ($type eq 1)		{return 'number'}
-	if ($type eq 2) 	{return 'object'}
-	if ($type eq 3)		{return 's-string'}
-	if ($type eq 4)		{return 'baseptr'}
-	if ($type eq 5)		{return 'nil'}
-	if ($type eq 6)		{return 'code'}
-	if ($type eq 7)		{return 'list'}
-	if ($type eq 8)		{return 'true'}
-	if ($type eq 9)		{return 'd-string'}
-	if ($type eq 10)	{return 'fnaddr'}
-	if ($type eq 11)	{return 'tpl'}
-	if ($type eq 13)	{return 'property'}
-	if ($type eq 14)	{return 'demand'}
-	if ($type eq 15)	{return 'synonym'}
-	if ($type eq 16)	{return 'redir'}
-	if ($type eq 17)	{return 'tpl2'}
-	return "unknown ($type)";
+sub preloadConstants() {
+	#Property Types
+	$Constant_Property_Type[1]	= 'number';
+	$Constant_Property_Type[2]	= 'object';
+	$Constant_Property_Type[3]	= 's-string';
+	$Constant_Property_Type[4]	= 'baseptr';
+	$Constant_Property_Type[5]	= 'nil';
+	$Constant_Property_Type[6]	= 'code';
+	$Constant_Property_Type[7]	= 'list';
+	$Constant_Property_Type[8]	= 'true';
+	$Constant_Property_Type[9]	= 'd-string';
+	$Constant_Property_Type[10]	= 'fnaddr';
+	$Constant_Property_Type[11]	= 'tpl';
+	$Constant_Property_Type[13]	= 'property';
+	$Constant_Property_Type[14]	= 'demand';
+	$Constant_Property_Type[15]	= 'synonym';
+	$Constant_Property_Type[16]	= 'redir';
+	$Constant_Property_Type[17]	= 'tpl2';
+	#Opcodes
+	#based on	https://github.com/garglk/garglk/blob/master/tads/tads2/opc.h
+	$Constant_Opcode[0x01]	= 'OPCPUSHNUM';		#  1
+	$Constant_Opcode[0x02]	= 'OPCPUSHOBJ';		#  2
+	$Constant_Opcode[0x03]	= 'OPCNEG';			#  3
+	$Constant_Opcode[0x04]	= 'OPCNOT';			#  4
+	$Constant_Opcode[0x05]	= 'OPCADD';			#  5
+	$Constant_Opcode[0x06]	= 'OPCSUB';			#  6
+	$Constant_Opcode[0x07]	= 'OPCMUL';			#  7
+	$Constant_Opcode[0x08]	= 'OPCDIV';			#  8
+	$Constant_Opcode[0x09]	= 'OPCAND';			#  9
+	$Constant_Opcode[0x0A]	= 'OPCOR';			# 10
+	$Constant_Opcode[0x0B]	= 'OPCEQ';			# 11
+	$Constant_Opcode[0x0C]	= 'OPCNE';			# 12
+	$Constant_Opcode[0x0D]	= 'OPCGT';			# 13
+	$Constant_Opcode[0x0E]	= 'OPCGE';			# 14
+	$Constant_Opcode[0x0F]	= 'OPCLT';			# 15
+	$Constant_Opcode[0x10]	= 'OPCLE';			# 16
+	$Constant_Opcode[0x11]	= 'OPCCALL';		# 17
+	$Constant_Opcode[0x12]	= 'OPCGETP';		# 18
+	$Constant_Opcode[0x13]	= 'OPCGETPDATA';	# 19
+	$Constant_Opcode[0x14]	= 'OPCGETLCL';		# 20
+	$Constant_Opcode[0x15]	= 'OPCPTRGETPDATA';	# 21
+	$Constant_Opcode[0x16]	= 'OPCRETURN';		# 22
+	$Constant_Opcode[0x17]	= 'OPCRETVAL';		# 23
+	$Constant_Opcode[0x18]	= 'OPCENTER';		# 24
+	$Constant_Opcode[0x19]	= 'OPCDISCARD';		# 25
+	$Constant_Opcode[0x1A]	= 'OPCJMP';			# 26
+	$Constant_Opcode[0x1B]	= 'OPCJF';			# 27
+	$Constant_Opcode[0x1C]	= 'OPCPUSHSELF';	# 28
+	$Constant_Opcode[0x1D]	= 'OPCSAY';			# 29
+	$Constant_Opcode[0x1E]	= 'OPCBUILTIN';		# 30
+	$Constant_Opcode[0x1F]	= 'OPCPUSHSTR';		# 31
+	$Constant_Opcode[0x20]	= 'OPCPUSHLST';		# 32
+	$Constant_Opcode[0x21]	= 'OPCPUSHNIL';		# 33
+	$Constant_Opcode[0x22]	= 'OPCPUSHTRUE';	# 34
+	$Constant_Opcode[0x23]	= 'OPCPUSHFN';		# 35
+	$Constant_Opcode[0x24]	= 'OPCGETPSELFDATA';# 36
+	#37 is unused
+	$Constant_Opcode[0x26]	= 'OPCPTRCALL';		# 38
+	$Constant_Opcode[0x27]	= 'OPCPTRINH';		# 39
+	$Constant_Opcode[0x28]	= 'OPCPTRGETP';		# 40
+	$Constant_Opcode[0x29]	= 'OPCPASS';		# 41
+	$Constant_Opcode[0x2A]	= 'OPCEXIT';		# 42
+	$Constant_Opcode[0x2B]	= 'OPCABORT';		# 43
+	$Constant_Opcode[0x2C]	= 'OPCASKDO';		# 44
+	$Constant_Opcode[0x2D]	= 'OPCASKIO';		# 45
+	$Constant_Opcode[0x2E]	= 'OPCEXPINH';		# 46
+	$Constant_Opcode[0x2F]	= 'OPCEXPINHPTR';	# 47
+	$Constant_Opcode[0x30]	= 'OPCCALLD';		# 48
+	$Constant_Opcode[0x31]	= 'OPCGETPD';		# 49
+	$Constant_Opcode[0x32]	= 'OPCBUILTIND';	# 50
+	$Constant_Opcode[0x33]	= 'OPCJE';			# 51
+	$Constant_Opcode[0x34]	= 'OPCJNE';			# 52
+	$Constant_Opcode[0x35]	= 'OPCJGT';			# 53
+	$Constant_Opcode[0x36]	= 'OPCJGE';			# 54
+	$Constant_Opcode[0x37]	= 'OPCJLT';			# 55
+	$Constant_Opcode[0x38]	= 'OPCJLE';			# 56
+	$Constant_Opcode[0x39]	= 'OPCJNAND';		# 57
+	$Constant_Opcode[0x3A]	= 'OPCJNOR';		# 58
+	$Constant_Opcode[0x3B]	= 'OPCJT';			# 59
+	$Constant_Opcode[0x3C]	= 'OPCGETPSELF';	# 60
+	$Constant_Opcode[0x3D]	= 'OPCGETPSLFD';	# 61
+	$Constant_Opcode[0x3E]	= 'OPCGETPOBJ';		# 62
+	$Constant_Opcode[0x3F]	= 'OPCGETPOBJD';	# 63
+	$Constant_Opcode[0x40]	= 'OPCINDEX';		# 64
+	#65 is unused
+	#66 is unused
+	$Constant_Opcode[0x43]	= 'OPCPUSHPN';		# 67
+	$Constant_Opcode[0x44]	= 'OPCJST';			# 68
+	$Constant_Opcode[0x45]	= 'OPCJSF';			# 69
+	$Constant_Opcode[0x46]	= 'OPCJMPD';		# 70
+	$Constant_Opcode[0x47]	= 'OPCINHERIT';		# 71
+	$Constant_Opcode[0x48]	= 'OPCCALLEXT';		# 72
+	$Constant_Opcode[0x49]	= 'OPCDBGRET';		# 73
+	$Constant_Opcode[0x4A]	= 'OPCCONS';		# 74
+	$Constant_Opcode[0x4B]	= 'OPCSWITCH';		# 75
+	$Constant_Opcode[0x4C]	= 'OPCARGC';		# 76
+	$Constant_Opcode[0x4D]	= 'OPCCHKARGC';		# 77
+	$Constant_Opcode[0x4E]	= 'OPCLINE';		# 78
+	$Constant_Opcode[0x4F]	= 'OPCFRAME';		# 79
+	$Constant_Opcode[0x50]	= 'OPCBP';			# 80
+	$Constant_Opcode[0x51]	= 'OPCGETDBLCL';	# 81
+	$Constant_Opcode[0x52]	= 'OPCGETPPTRSELF';	# 82
+	$Constant_Opcode[0x53]	= 'OPCMOD';			# 83
+	$Constant_Opcode[0x54]	= 'OPCBAND';		# 84
+	$Constant_Opcode[0x55]	= 'OPCBOR';			# 85
+	$Constant_Opcode[0x56]	= 'OPCXOR';			# 86
+	$Constant_Opcode[0x57]	= 'OPCBNOT';		# 87
+	$Constant_Opcode[0x58]	= 'OPCSHL';			# 88
+	$Constant_Opcode[0x59]	= 'OPCSHR';			# 89
+	$Constant_Opcode[0x5A]	= 'OPCNEW';			# 90
+	$Constant_Opcode[0x5B]	= 'OPCDELETE';		# 91
+	#Opcode Payloads
+	#based on detads, naming convention, and trial and error.
+	$Constant_Opcode_Payload[0x01]	= ['INT32'];						# 1		OPCPUSHNUM
+	$Constant_Opcode_Payload[0x02]	= ['OBJECT'];						# 2		OPCPUSHOBJ
+	$Constant_Opcode_Payload[0x03]	= ['NONE'];							# 3		OPCNEG
+	$Constant_Opcode_Payload[0x04]	= ['NONE'];							# 4		OPCNOT
+	$Constant_Opcode_Payload[0x05]	= ['NONE'];							# 5		OPCADD
+	$Constant_Opcode_Payload[0x06]	= ['NONE'];							# 6		OPCSUB
+	$Constant_Opcode_Payload[0x07]	= ['NONE'];							# 7		OPCMUL
+	$Constant_Opcode_Payload[0x08]	= ['NONE'];							# 8		OPCDIV
+	$Constant_Opcode_Payload[0x09]	= ['NONE'];							# 9		OPCAND
+	$Constant_Opcode_Payload[0x0A]	= ['NONE'];							# 10	OPCOR
+	$Constant_Opcode_Payload[0x0B]	= ['NONE'];							# 11	OPCEQ
+	$Constant_Opcode_Payload[0x0C]	= ['NONE'];							# 12	OPCNE
+	$Constant_Opcode_Payload[0x0D]	= ['NONE'];							# 13	OPCGT
+	$Constant_Opcode_Payload[0x0E]	= ['NONE'];							# 14	OPCGE
+	$Constant_Opcode_Payload[0x0F]	= ['NONE'];							# 15	OPCLT
+	$Constant_Opcode_Payload[0x10]	= ['NONE'];							# 16	OPCLE
+	$Constant_Opcode_Payload[0x11]	= ['UINT8', 'OBJECT'];				# 17	OPCCALL
+	$Constant_Opcode_Payload[0x12]	= ['UINT8', 'PROPERTY'];			# 18	OPCGETP
+	$Constant_Opcode_Payload[0x13]	= ['UNKNOWN'];						# 19	OPCGETPDATA
+	$Constant_Opcode_Payload[0x14]	= ['LOCAL'];						# 20	OPCGETLCL
+	$Constant_Opcode_Payload[0x15]	= ['UNKNOWN'];						# 21	OPCPTRGETPDATA
+	$Constant_Opcode_Payload[0x16]	= ['UNKNOWN2'];						# 22	OPCRETURN
+	$Constant_Opcode_Payload[0x17]	= ['UNKNOWN2'];						# 23	OPCRETVAL
+	$Constant_Opcode_Payload[0x18]	= ['LOCAL'];						# 24	OPCENTER
+	$Constant_Opcode_Payload[0x19]	= ['NONE'];							# 25	OPCDISCARD
+	$Constant_Opcode_Payload[0x1A]	= ['OFFSET'];						# 26	OPCJMP
+	$Constant_Opcode_Payload[0x1B]	= ['OFFSET']	;					# 27	OPCJF
+	$Constant_Opcode_Payload[0x1C]	= ['NONE'];							# 28	OPCPUSHSELF
+	$Constant_Opcode_Payload[0x1D]	= ['STRING'];						# 29	OPCSAY
+	$Constant_Opcode_Payload[0x1E]	= ['UINT8', 'BUILTIN'];				# 30	OPCBUILTIN
+	$Constant_Opcode_Payload[0x1F]	= ['STRING'];						# 31	OPCPUSHSTR
+	$Constant_Opcode_Payload[0x20]	= ['LIST'];							# 32	OPCPUSHLST
+	$Constant_Opcode_Payload[0x21]	= ['NONE'];							# 33	OPCPUSHNIL
+	$Constant_Opcode_Payload[0x22]	= ['NONE'];							# 34	OPCPUSHTRUE
+	$Constant_Opcode_Payload[0x23]	= ['OBJECT'];						# 35	OPCPUSHFN
+	$Constant_Opcode_Payload[0x24]	= ['UNKNOWN'];						# 36	OPCGETPSELFDATA
+	#37 is unused
+	$Constant_Opcode_Payload[0x26]	= ['NONE'];							# 38	OPCPTRCALL
+	$Constant_Opcode_Payload[0x27]	= ['UNKNOWN'];						# 39	OPCPTRINH
+	$Constant_Opcode_Payload[0x28]	= ['UINT8'];						# 40	OPCPTRGETP
+	$Constant_Opcode_Payload[0x29]	= ['PROPERTY'];						# 41	OPCPASS
+	$Constant_Opcode_Payload[0x2A]	= ['NONE'];							# 42	OPCEXIT
+	$Constant_Opcode_Payload[0x2B]	= ['NONE'];							# 43	OPCABORT
+	$Constant_Opcode_Payload[0x2C]	= ['NONE'];							# 44	OPCASKDO
+	$Constant_Opcode_Payload[0x2D]	= ['PROPERTY'];						# 45	OPCASKIO
+	$Constant_Opcode_Payload[0x2E]	= ['UINT8', 'PROPERTY', 'OBJECT'];	# 46	OPCEXPINH
+	$Constant_Opcode_Payload[0x2F]	= ['UNKNOWN'];						# 47	OPCEXPINHPTR
+	$Constant_Opcode_Payload[0x30]	= ['UNKNOWN'];						# 48	OPCCALLD
+	$Constant_Opcode_Payload[0x31]	= ['UNKNOWN'];						# 49	OPCGETPD
+	$Constant_Opcode_Payload[0x32]	= ['UNKNOWN'];						# 50	OPCBUILTIND
+	$Constant_Opcode_Payload[0x33]	= ['UNKNOWN'];						# 51	OPCJE
+	$Constant_Opcode_Payload[0x34]	= ['UNKNOWN'];						# 52	OPCJNE
+	$Constant_Opcode_Payload[0x35]	= ['UNKNOWN'];						# 53	OPCJGT
+	$Constant_Opcode_Payload[0x36]	= ['UNKNOWN'];						# 54	OPCJGE
+	$Constant_Opcode_Payload[0x37]	= ['UNKNOWN'];						# 55	OPCJLT
+	$Constant_Opcode_Payload[0x38]	= ['UNKNOWN'];						# 56	OPCJLE
+	$Constant_Opcode_Payload[0x39]	= ['UNKNOWN'];						# 57	OPCJNAND
+	$Constant_Opcode_Payload[0x3A]	= ['UNKNOWN'];						# 58	OPCJNOR
+	$Constant_Opcode_Payload[0x3B]	= ['UNKNOWN'];						# 59	OPCJT
+	$Constant_Opcode_Payload[0x3C]	= ['UINT8', 'PROPERTY'];			# 60	OPCGETPSELF
+	$Constant_Opcode_Payload[0x3D]	= ['UNKNOWN'];						# 61	OPCGETPSLFD
+	$Constant_Opcode_Payload[0x3E]	= ['UINT8', 'OBJECT', 'PROPERTY'];	# 62	OPCGETPOBJ
+	$Constant_Opcode_Payload[0x3F]	= ['UNKNOWN'];						# 63	OPCGETPOBJD
+	$Constant_Opcode_Payload[0x40]	= ['NONE'];							# 64	OPCINDEX
+	#65-66 are unused
+	$Constant_Opcode_Payload[0x43]	= ['PROPERTY'];						# 67	OPCPUSHPN
+	$Constant_Opcode_Payload[0x44]	= ['OFFSET'];						# 68	OPCJST
+	$Constant_Opcode_Payload[0x45]	= ['OFFSET'];						# 69	OPCJSF
+	$Constant_Opcode_Payload[0x46]	= ['UNKNOWN'];						# 70	OPCJMPD
+	$Constant_Opcode_Payload[0x47]	= ['UINT8', 'PROPERTY'];			# 71	OPCINHERIT
+	$Constant_Opcode_Payload[0x48]	= ['UNKNOWN'];						# 72	OPCCALLEXT
+	$Constant_Opcode_Payload[0x49]	= ['UNKNOWN'];						# 73	OPCDBGRET
+	$Constant_Opcode_Payload[0x4A]	= ['UINT16'];						# 74	OPCCONS
+	$Constant_Opcode_Payload[0x4B]	= ['SWITCH'];						# 75	OPCSWITCH
+	$Constant_Opcode_Payload[0x4C]	= ['NONE'];							# 76	OPCARGC
+	$Constant_Opcode_Payload[0x4D]	= ['UINT8'];						# 77	OPCCHKARGC
+	$Constant_Opcode_Payload[0x4E]	= ['UNKNOWN'];						# 78	OPCLINE
+	$Constant_Opcode_Payload[0x4F]	= ['FRAME'];						# 79	OPCFRAME
+	$Constant_Opcode_Payload[0x50]	= ['UNKNOWN'];						# 80	OPCBP
+	$Constant_Opcode_Payload[0x51]	= ['UNKNOWN'];						# 81	OPCGETDBLCL
+	$Constant_Opcode_Payload[0x52]	= ['UINT8'];						# 82	OPCGETPPTRSELF	Experimental
+	$Constant_Opcode_Payload[0x53]	= ['NONE'];							# 83	OPCMOD
+	$Constant_Opcode_Payload[0x54]	= ['NONE'];							# 84	OPCBAND
+	$Constant_Opcode_Payload[0x55]	= ['NONE'];							# 85	OPCBOR
+	$Constant_Opcode_Payload[0x56]	= ['NONE'];							# 86	OPCXOR
+	$Constant_Opcode_Payload[0x57]	= ['NONE'];							# 87	OPCBNOT
+	$Constant_Opcode_Payload[0x58]	= ['NONE'];							# 88	OPCSHL
+	$Constant_Opcode_Payload[0x59]	= ['NONE'];							# 89	OPCSHR
+	$Constant_Opcode_Payload[0x5A]	= ['NONE'];							# 90	OPCNEW
+	$Constant_Opcode_Payload[0x5B]	= ['NONE'];							# 91	OPCDELETE
 }
 
 #Game Details
@@ -94,7 +284,7 @@ my $Translate_Object_Start = 0;		# Object ID to start autogenerated symbol mappi
 #Mappings
 my @Translate_Action			= ();	# Names for actions aren't stored anywhere
 my @Translate_Builtin			= ();
-my @Translate_Object			= ();
+my @Translate_Object_Name		= ();
 my @Translate_Object_Argument	= ();
 my @Translate_Object_Local		= ();
 my @Translate_Property			= ();
@@ -114,41 +304,38 @@ sub nameBuiltin($) {
 sub nameObject($) {
 	my $id = shift;
 	return 'nullObj'				if ($id eq $Null_Value);
-	return $Translate_Object[$id]	if defined $Translate_Object[$id];
+	return $Translate_Object_Name[$id]	if defined $Translate_Object_Name[$id];
 	return "Obj$id";
 }
 sub nameProperty($) {
 	my $id = shift;
-	return 'nullprop'				if ($id eq $Null_Value);
+	return 'nullprop'				if (not defined $id || $id eq $Null_Value);
 	return $Translate_Property[$id] if defined $Translate_Property[$id];
 	return "prop$id";
 }
+sub nameLocal($$) {
+	my $id		= shift;	# Negative for object functions, positive for properties
+	my $local	= shift;	# Negative for arguments, positive for locals
+	if ($id > 0) {	# Properties
+		return $Translate_Property_Local[$id][$local - 1]	if defined $Translate_Property_Local[$id][$local - 1];
+	} else {		# Functions
+		return $Translate_Object_Local[-$id][$local - 1]	if defined $Translate_Object_Local[-$id][$local - 1];
+	}
+	return "local$local";
+	}
+# Arguments; arg1 is stored at index 0, etc
 sub nameArgument($$) {
 	my $id		= shift;	# Negative for object functions, positive for properties
-	my $value	= shift;	# Negative for arguments, positive for locals
-	# Locals; loc1 is stored at index 0, etc
-	if ($value > 0) {
-		my $local	= $value;
-		if ($id > 0) {	# Properties
-			return $Translate_Property_Local[$id][$local - 1]	if defined $Translate_Property_Local[$id][$local - 1];
-		} else {		# Functions
-			return $Translate_Object_Local[-$id][$local - 1]	if defined $Translate_Object_Local[-$id][$local - 1];
-		}
-		return "local$local";
+	my $arg		= shift;
+	if ($id > 0) {	# Properties
+		return $Translate_Property_Argument[$id][$arg - 1]	if defined $Translate_Property_Argument[$id][$arg - 1];
+	} else {		# Functions
+		return $Translate_Object_Argument[-$id][$arg - 1]	if defined $Translate_Object_Argument[-$id][$arg - 1];
 	}
-	# Arguments; arg1 is stored at index 0, etc
-	else {
-		my $arg		= -1 * $value;
-		if ($id > 0) {	# Properties
-			return $Translate_Property_Argument[$id][$arg - 1]	if defined $Translate_Property_Argument[$id][$arg - 1];
-		} else {		# Functions
-			return $Translate_Object_Argument[-$id][$arg - 1]	if defined $Translate_Object_Argument[-$id][$arg - 1];
-		}
-		return "arg$arg";
-	}
+	return "arg$arg";
 }
 #Mapping File Handling
-sub preloadMapping(){
+sub preloadMapping() {
 	#Names for builtins and constant properties are taken from detads by Daniel Schepler
 	$Translate_Property[1]	= 'doAction';
 	$Translate_Property[2]	= 'verb';
@@ -323,11 +510,11 @@ sub preloadMapping(){
 	$Translate_Builtin[82]	= 'inputdialog'; 
 	$Translate_Builtin[83]	= 'resourceExists';
 }
-sub parseMapping(){
+sub parseMapping() {
 	open($File_Mapping, "< :raw :bytes", $FileName_Mapping)
 		|| die("Couldn't open $FileName_Mapping for reading.");
 	my $line;
-	while ($line = <$File_Mapping>){
+	while ($line = <$File_Mapping>) {
 		#Pre-process the line
 		chomp $line;
 		next if $line eq '';					# Skip empty lines
@@ -335,31 +522,31 @@ sub parseMapping(){
 		$line	= (split('#', $line))[0];		# Remove comments
 		my $parsed;
 		#Builtins are not translated
-		if($line =~ m/(Action|Act)s?\[?(\d*)\]?\s*=\s*['"](.*)['"]/i ){
+		if($line =~ m/(Action|Act)s?\[?(\d*)\]?\s*=\s*['"](.*)['"]/i ) {
 			$parsed 					= $3;
 			$Translate_Action[$2]		= $parsed;
 		}
-		if($line =~ m/(Object|Obj)s?\[?(\d*)\]?\s*=\s*['"](.*)['"]/i ){
+		if($line =~ m/(Object|Obj)s?\[?(\d*)\]?\s*=\s*['"](.*)['"]/i ) {
 			$parsed 					= $3;
-			$Translate_Object[$2]		= $parsed;
+			$Translate_Object_Name[$2]		= $parsed;
 		}
-		if($line =~ m/(Object|Obj)s?[-_]?(Arg|Argument)?\[?(\d*)[.-](\d*)\]?\s*=\s*['"](.*)['"]/i ){
+		if($line =~ m/(Object|Obj)s?[-_]?(Arg|Argument)?\[?(\d*)[.-](\d*)\]?\s*=\s*['"](.*)['"]/i ) {
 			$parsed 									= $5;
 			$Translate_Object_Argument[$3][$4 - 1]	= $parsed;
 		}
-		if($line =~ m/(Object|Obj)s?[-_]?(Loc|Local)?\[?(\d*)[.-](\d*)\]?\s*=\s*['"](.*)['"]/i ){
+		if($line =~ m/(Object|Obj)s?[-_]?(Loc|Local)?\[?(\d*)[.-](\d*)\]?\s*=\s*['"](.*)['"]/i ) {
 			$parsed 									= $5;
 			$Translate_Object_Local[$3][$4 - 1]		= $parsed;
 		}
-		if($line =~ m/(Property|Properties|Props|Prop)\[?(\d*)\]?\s*=\s*['"](.*)['"]/i ){
+		if($line =~ m/(Property|Properties|Props|Prop)\[?(\d*)\]?\s*=\s*['"](.*)['"]/i ) {
 			$parsed 					= $3;
 			$Translate_Property[$2]		= $parsed;
 		}
-		if($line =~ m/(Property|Props|Prop)[-_]?(Arg|Argument)?\[?(\d*)[.-](\d*)\]?\s*=\s*['"](.*)['"]/i ){
+		if($line =~ m/(Property|Props|Prop)[-_]?(Arg|Argument)?\[?(\d*)[.-](\d*)\]?\s*=\s*['"](.*)['"]/i ) {
 			$parsed 									= $5;
 			$Translate_Property_Argument[$3][$4 - 1]	= $parsed;
 		}
-		if($line =~ m/(Property|Props|Prop)[-_]?(Loc|Local)?\[?(\d*)[.-](\d*)\]?\s*=\s*['"](.*)['"]/i ){
+		if($line =~ m/(Property|Props|Prop)[-_]?(Loc|Local)?\[?(\d*)[.-](\d*)\]?\s*=\s*['"](.*)['"]/i ) {
 			$parsed 									= $5;
 			$Translate_Property_Local[$3][$4 - 1]		= $parsed;
 		}
@@ -367,11 +554,11 @@ sub parseMapping(){
 	}
 	close $File_Mapping;
 }
-sub generateMapping(){
+sub generateMapping() {
 	open($File_Mapping, "> :raw :bytes", $FileName_Path . $FileName_Generate)
 		|| die "$0: can't open " . $FileName_Path . $FileName_Generate . "for writing: $!";
 	print $File_Mapping "#Actions\n";
-	for (my $action=0 ; $action<$#Translate_Action ; $action++){
+	for (my $action=0 ; $action<$#Translate_Action ; $action++) {
 		print $File_Mapping '#' unless defined $Translate_Action[$action];
 		print $File_Mapping "Action$action\t= '";
 		print $File_Mapping nameAction($action) if defined $Translate_Action[$action];
@@ -379,15 +566,15 @@ sub generateMapping(){
 	}
 	#Builtins are skipped on purpose
 	print $File_Mapping "#Objects\n";
-	for my $obj ( $Translate_Object_Start .. $#Translate_Object) {
-		if (defined $Translate_Object[$obj]){
+	for my $obj ( $Translate_Object_Start .. $#Translate_Object_Name) {
+		if (defined $Translate_Object_Name[$obj]) {
 			print $File_Mapping "Obj$obj\t= '" . nameObject($obj) . "'\n";
-			if (defined $Translate_Object_Argument[$obj]){
+			if (defined $Translate_Object_Argument[$obj]) {
 				for my $arg ( 0 .. $#{ $Translate_Object_Argument[$obj] } ) {
 					print $File_Mapping "\tObjArg$obj-".($arg+1)."\t= '$Translate_Object_Argument[$obj][$arg]'\n" if defined $Translate_Object_Argument[$obj][$arg];
 				}
 			}
-			if (defined $Translate_Object_Local[$obj]){
+			if (defined $Translate_Object_Local[$obj]) {
 				for my $loc ( 0 .. $#{ $Translate_Object_Local[$obj] } ) {
 					print $File_Mapping "\tObjLoc$obj-".($loc+1)."\t= '$Translate_Object_Local[$obj][$loc]'\n" if defined $Translate_Object_Local[$obj][$loc];
 				}
@@ -396,14 +583,14 @@ sub generateMapping(){
 	}
 	print $File_Mapping "#Properties\n";
 	for my $prop ( $Translate_Property_Start .. $#Translate_Property) {
-		if (defined $Translate_Property[$prop]){
+		if (defined $Translate_Property[$prop]) {
 			print $File_Mapping "Prop$prop\t= '" . nameProperty($prop) . "'\n";
-			if (defined $Translate_Property_Argument[$prop]){
+			if (defined $Translate_Property_Argument[$prop]) {
 				for my $arg ( 0 .. $#{ $Translate_Property_Argument[$prop] } ) {
 					print $File_Mapping "\tPropArg$prop-".($arg+1)."\t= '$Translate_Property_Argument[$prop][$arg]'\n" if defined $Translate_Property_Argument[$prop][$arg];
 				}
 			}
-			if (defined $Translate_Property_Local[$prop]){
+			if (defined $Translate_Property_Local[$prop]) {
 				for my $loc ( 0 .. $#{ $Translate_Property_Local[$prop] } ) {
 					print $File_Mapping "\tPropLoc$prop-".($loc+1)."\t= '$Translate_Property_Local[$prop][$loc]'\n" if defined $Translate_Property_Local[$prop][$loc];
 				}
@@ -414,7 +601,7 @@ sub generateMapping(){
 }
 ##File Handling
 #Decrypts the block of text passed in
-sub decrypt($){
+sub decrypt($) {
 	return unless $Flags_Encrypted;
 	my $block	= shift;
 	my $size	= length($block);
@@ -426,7 +613,7 @@ sub decrypt($){
 	}
 	return $block ^ $block_mask;
 }
-sub debug($;$){
+sub debug($;$) {
 	my $block	= shift;
 	my $id		= shift;
 	my $size	= length $block;
@@ -442,7 +629,7 @@ sub debug($;$){
 }
 
 ##Parsing
-sub parseHeader(){
+sub parseHeader() {
 	#The header is 48 bytes long
 	# 0-10	File header signature
 	#11-12	Reserved but unused (?)
@@ -494,9 +681,9 @@ sub parseHeader(){
 	print $File_Log "\t\tCase folding was turned on in original compile\n"	if $Flags_CaseFolding;
 	print $File_Log "\t\tNew-style line records\n"							if $Flags_NewStyleLine;
 }
-sub parseFile(){
+sub parseFile() {
 	#The compiled file consists of several blocks of varying length.
-	for (;;){
+	for (;;) {
 		#Each block starts with a header of varying length
 		my $size_type;	# 1 byte; size of the type field
 		my $block_type;	# X bytes as defined by size_type; the type of data block
@@ -526,7 +713,7 @@ sub parseFile(){
 	}
 }
 #XSI blocks contains the XOR Seed Information for the compiled file.
-sub parseBlockXSI($){
+sub parseBlockXSI($) {
 	my $block = shift;
 	#Read initial seed value and increment value
 	$Encryption_Seed		= unpack('C', substr($block, 0, 1));
@@ -534,7 +721,7 @@ sub parseBlockXSI($){
 	print $File_Log "\t($Encryption_Seed+$Encryption_Increment)\n";
 }
 #OBJect blocks contain all the objects of the game
-sub parseBlockOBJ($){
+sub parseBlockOBJ($) {
 	my $block	= shift;
 	my $length	= length($block);
 	#Objects are stored sequentially with no dividers or indication of how many there are;
@@ -600,8 +787,8 @@ sub parseBlockOBJ($){
 				$property{$prop_id}	= {
 					type	=> $prop_type,
 					data	=> $prop_data
-				} unless namePropertyType($prop_type) eq 'demand'; # Demand properties are useless and skipped
-				print $File_Log "\t\tProp$prop_id ($prop_size bytes): ".namePropertyType($prop_type)." ($prop_flag)\n"
+				} unless $Constant_Property_Type[$prop_type] eq 'demand'; # Demand properties are useless and skipped
+				print $File_Log "\t\tProp$prop_id ($prop_size bytes): $Constant_Property_Type[$prop_type] ($prop_flag)\n"
 					if $Option_Verbose;
 				$pos_data += 6 + $prop_size;
 			}
@@ -626,7 +813,7 @@ sub parseBlockOBJ($){
 	print $File_Log "\tFound $found objects in total\n";
 }
 #ForMaT STRing block
-sub parseBlockFMTSTR($){
+sub parseBlockFMTSTR($) {
 	my $block	= shift;
 	my $length	= length($block);
 	#FMTSTR has a sub-header which contains the size of the block.
@@ -656,10 +843,11 @@ sub parseBlockFMTSTR($){
 	print $File_Log "\tFound $found formated strings\n";
 }
 #REQuired Functionality block
-sub parseBlockREQ($){
+sub parseBlockREQ($) {
 	my $block	= shift;
 	my $length	= length($block);
 	#Names and arguments for required functions are taken from detads by Daniel Schepler
+	#Also used fio.c (from line 589)
 	my @req_names	= [];
 	$req_names[0]	= 'Me'; 
 	$req_names[1]	= 'takeVerb'; 
@@ -686,6 +874,8 @@ sub parseBlockREQ($){
 	$req_names[22]	= 'endCommand'; 
 	$req_names[23]	= 'preCommand';
 	$req_names[24]	= 'parseAskobjIndirect';
+	$req_names[25]	= 'preparseExt';		# From fio.c
+	$req_names[26]	= 'parseDefaultExt';	# From fio.c
 	my @req_args	= [];
 	$req_args[7]	= ['cmd'];							# preparse
 	$req_args[8]	= ['num', 'str'];					# parseError
@@ -707,20 +897,20 @@ sub parseBlockREQ($){
 	#Required functions are stored as an array of UINT16 pointing to the ID of the implementing object; 65535 as null value
 	#Exactly how many there are depends on the version of TADS; we currently know the names of 25.
 	my $found	= $length / 2;
-	if ($found > $#req_names + 1){
+	if ($found > $#req_names + 1) {
 		my $message = "REQ: Found $found entries, only the first ". ($#req_names + 1) . " are processed";
 		print $File_Log	"\t$message\n";
 		warn $message;
 		$found	= $#req_names + 1;
 	}
-	for my $i(0 .. $found){
+	for my $i(0 .. $found) {
 		my $object	= unpack('S', substr($block, $i * 2, 2));
-		unless ($object eq $Null_Value){
+		unless ($object eq $Null_Value) {
 			print $File_Log	"\t$i:\tObj$object\t($req_names[$i])\n" if $Option_Verbose;
-			print $File_Log	"\t$i:\tObj$object is named $Translate_Object[$object]\n"
-				if defined $Translate_Object[$object] 
-					&& $Translate_Object[$object] != $req_names[$i];
-			$Translate_Object[$object]			= $req_names[$i];
+			print $File_Log	"\t$i:\tObj$object is named $Translate_Object_Name[$object]\n"
+				if defined $Translate_Object_Name[$object] 
+					&& $Translate_Object_Name[$object] != $req_names[$i];
+			$Translate_Object_Name[$object]			= $req_names[$i];
 			print $File_Log	"\t$i:\tObj$object has arguments\n"
 				if defined $Translate_Object_Argument[$object];
 			$Translate_Object_Argument[$object]	= $req_args[$i] if defined $req_args[$i];
@@ -728,7 +918,7 @@ sub parseBlockREQ($){
 	}
 }
 #CoMPounD word blocks contains contractions for the token parser
-sub parseBlockCMPD($){
+sub parseBlockCMPD($) {
 	my $block	= shift;
 	my $length	= length($block);
 	#CMPD has a sub-header which contains the size of the block.
@@ -759,7 +949,7 @@ sub parseBlockCMPD($){
 	print $File_Log "\tFound $found compounds\n";
 }
 #VOCabulary blocks contain text properties that are used by the parser
-sub parseBlockVOC($){
+sub parseBlockVOC($) {
 	my $block	= shift;
 	my $length	= length($block);
 	#Vocabulary properties are stored sequentially with no dividers or indication of how many there are;
@@ -815,7 +1005,7 @@ sub parseBlockRES($) {
 	print $File_Log "\t$entries Entries\n";
 	#Read metadata and embedded data for each entry in one pass
 	my $pos		= 8;
-	for my $i (1 .. $entries){
+	for my $i (1 .. $entries) {
 		#Metadata
 		my $data_pos	= unpack('L', substr($block, $pos, 4));
 		my $size		= unpack('L', substr($block, $pos + 4, 4));
@@ -824,7 +1014,7 @@ sub parseBlockRES($) {
 		$pos += $name_size + 10;
 		print $File_Log "\t$name ($size bytes) at $data_pos\n";
 		#Embedded data, only read when not in minimal mode
-		unless ($Option_Minimal){
+		unless ($Option_Minimal) {
 			my $path = $FileName_Path.(dirname $name);
 			make_path($path);
 			my $file_resource;
@@ -836,7 +1026,7 @@ sub parseBlockRES($) {
 	}
 }
 ##Analyzing
-sub analyze(){
+sub analyze() {
 	#Look for action definitions, and use those to name the related actions, objects and properties
 	print $File_Log "Analyzing Actions\n";
 	analyzeActions();
@@ -850,7 +1040,7 @@ sub analyze(){
 	analyzePropertyCode();
 }
 #Look through all objects, trying to find actions and verbs
-sub analyzeActions(){
+sub analyzeActions() {
 	#Actions aren't explicitly numbered so we keep a running tally
 	my $action	= 0;
 	for my $obj (0 .. $#Objects) {
@@ -867,8 +1057,8 @@ sub analyzeActions(){
 				next;
 			}
 			#TPL2 contains the action defintions we are looking for
-			next unless namePropertyType($type) eq 'tpl2';
-			#Store a reference from the property to the action, for laster use
+			next unless $Constant_Property_Type[$type] eq 'tpl2';
+			#As actions aren't numbered in the file, we store a reference from the property to the action for later use
 			$Objects[$obj]{properties}{$prop}{action}	= $action;
 			#Extract and analyze data
 			my $data	= $Objects[$obj]{properties}{$prop}{data};
@@ -882,18 +1072,18 @@ sub analyzeActions(){
 			undef $header_needed							if $Option_Verbose;
 			my $action_name	= nameAction($action);
 			#Try to use the short description as name for action and verb (property id 8)
-			if (defined $Objects[$obj]{properties}{8}){
+			if (defined $Objects[$obj]{properties}{8}) {
 				#Name the action
 				$action_name	= uniformName(propertyString($obj, 8));
 				$Translate_Action[$action]	= $action_name			unless defined $Translate_Action[$action];
 				#Name the verb
 				my $verb_name	= $action_name."Verb";
-				$Translate_Object[$obj]		= $verb_name unless defined $Translate_Object[$obj];
+				$Translate_Object_Name[$obj]		= $verb_name unless defined $Translate_Object_Name[$obj];
 				#Log results
 				my $action_rename;
 				my $verb_rename;
 				$action_rename				= 1 	unless $action_name eq $Translate_Action[$action];
-				$verb_rename				= 1		unless $verb_name eq $Translate_Object[$obj];
+				$verb_rename				= 1		unless $verb_name eq $Translate_Object_Name[$obj];
 				print $File_Log "\t$action\tObj$obj\n"			if ($verb_rename || $action_rename) && $header_needed;
 				print $File_Log	"\t\tAction: $action_name"		if $action_rename || $Option_Verbose;
 				print $File_Log "\t -> ".nameAction($action)	if $action_rename;
@@ -917,13 +1107,13 @@ sub analyzeActions(){
 				#Try to rename the preposition object
 				my $prep_name;
 				my $subheader_needed	= 1;
-				unless ($prep_obj eq $Null_Value){ #No preposition
+				unless ($prep_obj eq $Null_Value) { #No preposition
 					#Rename object
-					$prep_name						= uniformName(propertyString($prep_obj, 8) . ' Prep');
-					$Translate_Object[$prep_obj]	= $prep_name	unless defined $Translate_Object[$prep_obj];
+					$prep_name							= uniformName(propertyString($prep_obj, 8) . ' Prep');
+					$Translate_Object_Name[$prep_obj]	= $prep_name	unless defined $Translate_Object_Name[$prep_obj];
 					#Log results
 					my $rename;
-					$rename							= 1				unless $prep_name eq $Translate_Object[$prep_obj];
+					$rename							= 1				unless $prep_name eq $Translate_Object_Name[$prep_obj];
 					print $File_Log "\t$action\tObj$obj\n"					if $rename && $header_needed;
 					print $File_Log	"\t\t$prep_name($prep_obj):"			if $rename || $Option_Verbose;
 					print $File_Log "\t -> ".nameObject($prep_name)			if $rename;
@@ -1036,7 +1226,7 @@ sub analyzeActions(){
 	}
 }
 #Look through the vocabulary of each object to see if we find a suitable name
-sub analyzeVocabulary(){
+sub analyzeVocabulary() {
 	#There are four properties we use for naming:
 	#2: Verb
 	#3: Noun
@@ -1058,7 +1248,7 @@ sub analyzeVocabulary(){
 		$prep_token	= bestVocabularyToken($obj, 5, 1)		unless defined $name;
 		$name		= uniformName($prep_token . " Prep")	if defined $prep_token;
 		#Try to use the adjective and noun, if we are aggressive on name search
-		if ($Option_Naming && not defined $name){
+		if ($Option_Naming && not defined $name) {
 			my $token_noun;
 			$token_noun	= bestVocabularyToken($obj, 3, 1);
 			my $token_adj;
@@ -1070,26 +1260,31 @@ sub analyzeVocabulary(){
 		next unless defined $name;
 		
 		my $rename;
-		$Translate_Object[$obj]	= $name unless defined $Translate_Object[$obj];
-		$rename					= 1		unless $name eq $Translate_Object[$obj];
+		$Translate_Object_Name[$obj]	= $name unless defined $Translate_Object_Name[$obj];
+		$rename							= 1		unless $name eq $Translate_Object_Name[$obj];
 		print $File_Log	"\tObj$obj: $name"			if $rename || $Option_Verbose;
 		print $File_Log "\t -> ".nameObject($obj)	if $rename;
 		print $File_Log	"\n"						if $rename || $Option_Verbose;
 	}
 }
 #Look through all objects, analyzing the code segments of function objects
-sub analyzeFunctionCode(){
+sub analyzeFunctionCode() {
 	for my $obj (0 .. $#Objects) {
 		#Not all Object ID's are actually used
 		next unless defined $Objects[$obj];
 		#Not all objects have properties
 		next unless $Objects[$obj]{type} eq 1;
 		my $codeblock = $Objects[$obj]{code};
-		#TODO: Decode the codeblock and store the result
+		if (defined $Objects[$obj]{decoded}) {
+			print $File_Log "\tObj$obj\tCode already analyzed\n";
+			warn "$obj: Code already analyzed";
+			return;
+		}	
+		$Objects[$obj]{decoded}	= analyzeCodeblock(-$obj, $codeblock);	# Note the negative ID for object function code
 	}
 }
 #Look through all objects, analyzing the code segments of code properties
-sub analyzePropertyCode(){
+sub analyzePropertyCode() {
 	for my $obj (0 .. $#Objects) {
 		#Not all Object ID's are actually used
 		next unless defined $Objects[$obj];
@@ -1104,32 +1299,288 @@ sub analyzePropertyCode(){
 				next;
 			}
 			#Look for code properties
-			next unless namePropertyType($type) eq 'code';
+			next unless $Constant_Property_Type[$type] eq 'code';
 			my $codeblock = $Objects[$obj]{properties}{$prop}{data};
 			unless (defined $codeblock) {
 				print $File_Log "\tUnable to analyze $obj.$prop - Missing data";
 				warn "Unable to analyze $obj.$prop - Missing data";
 				next;
 			}
-			#TODO: Decode the codeblock and store the result
+			if (defined $Objects[$obj]{properties}{$prop}{decoded}) {
+				print $File_Log "\tProp$prop:\tCode already analyzed\n";
+				warn "$prop: Code already analyzed";
+				next;
+			}
+			$Objects[$obj]{properties}{$prop}{decoded}	= analyzeCodeblock($prop, $codeblock);	# Note the positive ID for property code
 		}
 	}
 }
+#Analyzes the bytecode and stores the result as easier-to-handle opcodes, which can then be printed
+sub analyzeCodeblock($$) {
+	my $id					= shift;	# Negative for object functions, positive for property code
+	my $codeblock			= shift;
+	#We store the analyzed code as an array of hashes
+	my @instructions		= ();
+	#Bytecode has no stored structure and has to be parsed sequentially.
+	#Some codes have embedded payload which alters the size
+	my $pos					= 0;
+	my $length				= length $codeblock;
+	#There are also some areas that shouldn't be parsed, mainly the switch tables
+	my @exclusion_intervals	= ();
+	my $exclusion_start		= $length;
+	my $exclusion_end		= $length;
+	#Make a log header if needed
+	print $File_Log	"\tObj".(-$id)."\t$length\n"	if $id < 0 && defined $Option_Verbose;
+	print $File_Log	"\tProp$id\t$length\n"			if $id > 0 && defined $Option_Verbose;
+	while ($pos < $length) {
+		my %instruction	= %{ analyzeOpcode($id, $codeblock, $pos) };
+		push @instructions, \%instruction;
+		#Read the opcode
+		my $opcode	= $instruction{opcode};
+		my $size	= $instruction{size};
+		#All valid opcodes below 192 are defined in the Constant_Opcode list
+		unless (defined $Constant_Opcode[$opcode] || $opcode >= 192) {
+			my $bytes = $length - ($pos + $size);
+			print $File_Log	"\tObj".(-$id)."\n"	if $id < 0 && not defined $Option_Verbose;
+			print $File_Log	"\tProp$id\n"		if $id > 0 && not defined $Option_Verbose;
+			print $File_Log	"\t\t$pos\tUnknown opcode $opcode - possible junk code ($bytes/$length left)\n";
+			debug($codeblock)					if defined $Option_Verbose;
+			return \@instructions;
+		}
+		print $File_Log	"\t\t$pos\t$opcode - $Constant_Opcode[$opcode] ($size bytes)\n"	if $Option_Verbose && $opcode < 192;
+		print $File_Log	"\t\t$pos\t$opcode - Assignment ($size bytes)\n"	if $Option_Verbose && $opcode >= 192;
+		$pos += $size;
+		#If we got a switch table, remember to skip over it later on.
+		if ($opcode eq 75) {
+			my $start	= $instruction{switch_start};
+			my $end		= $instruction{switch_end};
+			push @exclusion_intervals, {
+				start	=> $start,
+				end		=> $end
+			};
+			if ($exclusion_start > $start){
+				$exclusion_start	= $start;
+				$exclusion_end		= $end;
+			}
+			print $File_Log	"\t\t\t($start - $end)\n"	if $Option_Verbose;
+		}
+		#See if we have to skip
+		if ($pos >= $exclusion_start){
+			#Update position
+			$pos	= $exclusion_end;
+			#Update next exclusion interval
+			my $next_exclusion_start	= $length;
+			my $next_exclusion_end		= $length;
+			foreach my $ref (@exclusion_intervals){
+				my %interval	= %{ $ref };
+				if ($exclusion_start < $interval{start} && $interval{start} < $next_exclusion_start){
+					$next_exclusion_start	= $interval{start};
+					$next_exclusion_end		= $interval{end};
+				}
+			}
+			$exclusion_start	= $next_exclusion_start;
+			$exclusion_end		= $next_exclusion_end;
+		}
+	}
+}
+#Analyzes a codeblock at a given position to find the resulting instruction
+#Called recursively for SWITCH statements.
+sub analyzeOpcode($$$);
+sub analyzeOpcode($$$) {
+	my $id			= shift;	# Negative for object functions, positive for property code
+	my $codeblock	= shift;
+	my $pos			= shift;
+	my $opcode		= ord(substr($codeblock, $pos));
+	my $size		= 1;	# The size of the current instruction including embedded payload
+	my @payload		= ();
+	my %instruction	= ();
+	$instruction{pos}		= $pos;
+	$instruction{opcode}	= $opcode;
+	#Opcodes 192 and above are reserved for assignment, which is handled in a special way
+	if ($opcode < 192) {
+		#Some tads compilations contain unused "junk code"
+		#If we find unknown opcodes we have to stop gracefully
+		#Read embedded payload
+		my @templates	= ();
+		@templates		= @{ $Constant_Opcode_Payload[$opcode] } if defined $Constant_Opcode_Payload[$opcode];
+		foreach my $template (@templates) {
+			if ($template eq 'UNKNOWN') {
+				#payload is unknown for this opcode
+				#TODO: Better error handling
+				debug($codeblock, $id);
+				die "Unable to decode embedded payload for opcode $opcode";
+			}
+			elsif ($template eq 'INT32') {
+				#Number embedded as INT32
+				my $value	= unpack('l', substr($codeblock, $pos + $size, 4));
+				$size+=4;
+				push @payload, $value;
+			}
+			elsif ($template eq 'UINT16') {
+				#Number embedded as UINT16
+				my $value	= unpack('S', substr($codeblock, $pos + $size, 2));
+				$size+=2;
+				push @payload, $value;
+			}
+			elsif ($template eq 'OBJECT') {
+				#Object ID stored as UINT16
+				my $value	= decodeProperty(2, substr($codeblock, $pos + $size, 2));
+				$size+=2;
+				push @payload, $value;
+			}
+			elsif ($template eq 'PROPERTY') {
+				#Property ID stored as UINT16
+				my $value	= decodeProperty(13, substr($codeblock, $pos + $size, 2));
+				$size+=2;
+				push @payload, $value;
+			}
+			elsif ($template eq 'LOCAL') {
+				#Local variable ID stored as UINT16
+				my $value	= nameLocal($id, unpack('S', substr($codeblock, $pos + $size, 2)));
+				$size+=2;
+				push @payload, $value;
+			}
+			elsif ($template eq 'BUILTIN') {
+				#Builtin macro ID stored as UINT16
+				my $value	= nameBuiltin(unpack('S', substr($codeblock, $pos + $size, 2)));
+				$size+=2;
+				push @payload, $value;
+			}
+			elsif ($template eq 'OFFSET') {
+				#Address in code block, stored as relative locatin in INT16
+				my $value	= $pos + $size + unpack('s', substr($codeblock, $pos + $size, 2));
+				$size+=2;
+				push @payload, $value;
+			}
+			elsif ($template eq 'UINT8') {
+				#Number stored as UINT8
+				my $value	= ord(substr($codeblock, $pos + $size, 1));
+				$size++;
+				push @payload, $value;
+			}
+			elsif ($template eq 'STRING') {
+				#String stored as a UINT16 denoting the total length
+				my $length	= unpack('S', substr($codeblock, $pos + $size, 2));
+				my $value	= decodeProperty(3, substr($codeblock, $pos + $size, $length));
+				$size+=$length;
+				push @payload, $value;
+			}
+			elsif ($template eq 'LIST') {
+				#List stored as a UINT16 denoting the total length
+				my $length	= unpack('S', substr($codeblock, $pos + $size, 2));
+				my $value	= decodeProperty(7, substr($codeblock, $pos + $size, $length));
+				$size+=$length;
+				push @payload, $value;
+			}
+			elsif ($template eq 'FRAME') {
+				#Debug frame, stored as UINT16 denoting the total length.
+				#Skipped in full.
+				my $length	= unpack('S', substr($codeblock, $pos + $size, 2));
+				$size+=$length;
+			}
+			elsif ($template eq 'SWITCH') {
+				#Switch table at offset position
+				my $offset	= unpack('S', substr($codeblock, $pos + $size, 2));
+				my $subpos	= $pos + $size + $offset;
+				$size+=2;
+				#Read Switch table
+				#UINT16		n Entries
+				#n times:
+				#	OPCODE
+				#	INT16 Offset
+				#INT16	Default offset
+				$instruction{switch_start}	= $subpos;
+				my $entries	= unpack('S', substr($codeblock, $subpos, 2));
+				$subpos+=2;
+				for (my $entry=0 ; $entry<$entries ; $entry++){
+					my %switch_op		= %{ analyzeOpcode($id, $codeblock, $subpos) };
+					$subpos				+= $switch_op{size};
+					$switch_op{target}	= $subpos + unpack('S', substr($codeblock, $subpos, 2));
+					$subpos+=2;
+					push @payload, \%switch_op;
+				}
+				$instruction{switch_default}	= $subpos + unpack('S', substr($codeblock, $subpos, 2));
+				$subpos+=2;
+				$instruction{switch_end}	= $subpos;
+			}
+			elsif ($template eq 'UNKNOWN2') {
+				#Payload of known size but unknown function; skipped
+				#TODO: Log a warning
+				my $value	= unpack('s', substr($codeblock, $pos + $size, 2));
+				$size+=2;
+			}
+			else{
+				die "Unhandled payload $template for opcode $opcode" unless $template eq 'NONE';
+			}
+		}
+	}
+	else {
+		#Assignment opcodes are handled as a bitflag
+		#0-1	Destination type
+		#	00	LOCAL	UINT16	embedded
+		#	01	OBJECT	UINT16	embedded
+		#	10	(index, list)	from stack
+		#	11	(prop, obj)		from stack
+		#2-4	Operation type
+		#	000		:=	direct assignment
+		#	001		+=	add tos to destination
+		#	010		-=	subtract tos from destination
+		#	011		*=	multiply destination by tos
+		#	100		/=	divide destination by tos
+		#	101		++	increment tos
+		#	110		--	decrement tos
+		#	111			extension flag
+		#5	Destinationtype
+		#	0	leave on stack (implies pre increment/decrement)
+		#	1	discard (implies post increment/decrement)			
+		#6-7	Reserved, indicating assignment opcode
+		#If extension flag is set, contains an extra byte:
+		#	1	modulo and assign
+		#	2	binary AND and assign
+		#	3	binary OR and assign
+		#	4	binary XOR and assign
+		#	5	shift left and assign
+		#	6	shift right and assign
+		if    (($opcode & 0x03) eq 0x1c) {
+			#Extended opcode
+			my $value	= ord(substr($codeblock, $pos + $size, 1));
+			$size++;
+			push @payload, $value;
+		}
+		if    (($opcode & 0x03) eq 0x00
+			|| ($opcode & 0x03) eq 0x01) {
+			# Destination embedded as INT16
+			my $value	= unpack('s', substr($codeblock, $pos + $size, 2));
+			$size+=2;
+			push @payload, $value;
+		}
+		print $File_Log	"\t\t$pos\t$opcode - Assignment ($size bytes)\n"	if $Option_Verbose;
+		return {
+			pos		=> $pos,
+			opcode	=> $opcode,
+			size	=> $size,
+			payload	=> \@payload
+		};
+	}
+	$instruction{size}		= $size,
+	$instruction{payload}	= \@payload;
+	return \%instruction;
+}
 #Find the best (currently: longest) vocabulary token for an object, with optional recursion
 sub bestVocabularyToken($$;$);
-sub bestVocabularyToken($$;$){
+sub bestVocabularyToken($$;$) {
 	my $obj		= shift;
 	my $voc		= shift;
 	my $recurse	= shift;
 	my $best_token;
-	if	(defined $Objects[$obj]{vocabulary}{$voc}){
+	if	(defined $Objects[$obj]{vocabulary}{$voc}) {
 		my @tokens	= @{ $Objects[$obj]{vocabulary}{$voc} };
-		foreach my $token (@tokens){
+		foreach my $token (@tokens) {
 			$best_token = $token unless defined $best_token && length($best_token)>length($token);
 		}
 	}
 	#Only look recursively if we don't have a token yet
-	if ($recurse && not defined $best_token){
+	if ($recurse && not defined $best_token) {
 		my @parents	= ();
 		@parents	= @{ $Objects[$obj]{superclass} } if defined $Objects[$obj]{superclass};
 		#Do a width-first search:
@@ -1138,7 +1589,7 @@ sub bestVocabularyToken($$;$){
 			$best_token = $token unless defined $best_token && defined $token && length($best_token) > length($token);
 		}
 		#Only recursive further if we don't find a match.
-		unless (defined $best_token){
+		unless (defined $best_token) {
 			foreach my $parent (@parents) {
 				my $token = bestVocabularyToken($parent, $voc, $recurse+1);
 				$best_token = $token unless defined $best_token && defined $token && length($best_token) > length($token);
@@ -1148,7 +1599,7 @@ sub bestVocabularyToken($$;$){
 	return $best_token;
 }
 #Convert text into uniform naming without spaces or quotes
-sub uniformName($){
+sub uniformName($) {
 	my $text	= lc(shift);				# Lower case
 	$text		=~ s/\s+/ /;				# Convert all whitespace to spaces, and trim multiples
 	$text		=~ s/[-_'\"]//g;				# Trim all unwanted characters
@@ -1157,7 +1608,7 @@ sub uniformName($){
 	return $text;
 }
 #Converts a property of a given object to a string
-sub propertyString($$){
+sub propertyString($$) {
 	my $obj		= shift;
 	my $prop	= shift;
 	die "propertyString needs both Object and Property id"		unless defined $obj && defined $prop;
@@ -1172,7 +1623,7 @@ sub propertyString($$){
 	return decodeProperty($type, $data);
 }
 #Converts an array into a comma-separated string with an optional value delimiter
-sub arrayString($;$){
+sub arrayString($;$) {
 	my $listref		= shift;
 	my $delimiter	= shift;
 	$delimiter		= '' unless defined $delimiter;
@@ -1186,7 +1637,7 @@ sub arrayString($;$){
 }
 ##Output
 #Generate and print the corresponding TADS source code
-sub printSource(){
+sub printSource() {
 	print $File_Sourcecode "//Source generated by v$Decompiler_Version of tads2 decompiler by Fictitious Frode\n";
 	print $File_Sourcecode "//Based on $FileName_Bytecode compiled by $Version_Image at $Timestamp_Image\n";
 	#TODO: formatstrings
@@ -1207,7 +1658,7 @@ sub printSource(){
 	}
 }
 #Generate and print the source for a function object 
-sub printFunctionSource($){
+sub printFunctionSource($) {
 	my $obj	= shift;
 	#Function header
 	print $File_Sourcecode nameObject($obj) . ": function";
@@ -1220,7 +1671,7 @@ sub printFunctionSource($){
 	print $File_Sourcecode "}\n";
 }
 #Generate and print the source for a meta-object 
-sub printObjectSource($){
+sub printObjectSource($) {
 	my $obj	= shift;
 	#Object header
 	print $File_Sourcecode 'class ' if $Objects[$obj]{flags}{isClass};
@@ -1263,10 +1714,10 @@ sub printObjectSource($){
 				warn "Undefined data for $obj.$prop (".nameObject($obj).'.'.nameProperty($prop).')';
 				next;
 			}
-			if		(namePropertyType($prop_type) eq 'demand') {
+			if		($Constant_Property_Type[$prop_type] eq 'demand') {
 				next;	# This property is nothing to print
 			}
-			elsif	(namePropertyType($prop_type) eq 'synonym') {
+			elsif	($Constant_Property_Type[$prop_type] eq 'synonym') {
 				my $property_target	= unpack('S', $prop_data);
 				my $action_type		= substr(nameProperty($prop), 0, 2);
 				my $action_target	= nameAction($Property_Actions{$property_target});
@@ -1274,14 +1725,14 @@ sub printObjectSource($){
 				undef $action_type	unless $action_type eq 'do' || $action_type eq 'io';
 				print $File_Sourcecode "\t" . $action_type . "Synonym('$action_target')\t= '$action_this'\n" if $action_type;
 			}
-			elsif	(namePropertyType($prop_type) eq 'redir') {
+			elsif	($Constant_Property_Type[$prop_type] eq 'redir') {
 				my $action_type		= substr(nameProperty($prop), 0, 2);
 				my $object_target	= nameObject(unpack('S', $prop_data));
 				my $name			= nameProperty($prop);
 				undef $action_type	unless $action_type eq 'do' || $action_type eq 'io';
 				print $File_Sourcecode "\t$name\t= $object_target\n" if $action_type;
 			}
-			elsif	(namePropertyType($prop_type) eq 'tpl2') {
+			elsif	($Constant_Property_Type[$prop_type] eq 'tpl2') {
 				my $templates	= ord(substr($prop_data, 0));
 				for (my $i=0 ; $i<$templates ; $i++) {
 					# Read relevant identifiers for template
@@ -1295,10 +1746,10 @@ sub printObjectSource($){
 					$act_type 		= 'ioAction' 						unless $Null_Value eq $exc_io;
 					$prep			= '(' . nameObject($prep_obj) . ')'	unless $Null_Value eq $prep_obj;
 					# Write output
-					print $File_Sourcecode "\t$prep\t= '$name'\n";
+					print $File_Sourcecode "\t$act_type$prep\t= '$name'\n";
 				}
 			}
-			elsif	(namePropertyType($prop_type) eq 'code') {
+			elsif	($Constant_Property_Type[$prop_type] eq 'code') {
 				print $File_Sourcecode "\t"
 					.nameProperty($prop)."\t= Code-TODO\n";
 			}
@@ -1312,7 +1763,6 @@ sub printObjectSource($){
 			
 		}
 	}
-
 }
 
 ##Decoding
@@ -1321,6 +1771,8 @@ sub decodeProperty($$);
 sub decodeProperty($$) {
 	my $type	= shift;
 	my $data	= shift;
+	die "Can't decode without type"	unless defined $type;
+	die "Can't decode empty data"	unless defined $data;
 	#Default value is the name of the property; This covers:
 	# 4	BASEPTR
 	# 5	NIL		type is the same as value
@@ -1331,44 +1783,44 @@ sub decodeProperty($$) {
 	#15	SYNONYM
 	#16	REDIR
 	#17	TPL2
-	my $text	= namePropertyType($type);
-	if (namePropertyType($type) eq 'number')	{ $text	= unpack('l', $data) }							# 1
-	if (namePropertyType($type) eq 'object')	{ $text	= nameObject(unpack('S', $data)) }				# 2
-	if (namePropertyType($type) eq 's-string')	{ $text	= "'".substr($data, 2)."'" }					# 3
-	if (namePropertyType($type) eq 'd-string')	{ $text	= '"'.substr($data, 2).'"' }					# 9
-	if (namePropertyType($type) eq 'fnaddr')	{ $text	= '&'.nameObject(unpack('S', $data)) }			# 10
-	if (namePropertyType($type) eq 'property')	{ $text	= nameProperty(unpack('S', $data)) }			# 13
+	my $text	= $Constant_Property_Type[$type];
+	if ($text eq 'number')		{ $text	= unpack('l', $data) }							# 1
+	if ($text eq 'object')		{ $text	= nameObject(unpack('S', $data)) }				# 2
+	if ($text eq 's-string')	{ $text	= "'".substr($data, 2)."'" }					# 3
+	if ($text eq 'd-string')	{ $text	= '"'.substr($data, 2).'"' }					# 9
+	if ($text eq 'fnaddr')		{ $text	= '&'.nameObject(unpack('S', $data)) }			# 10
+	if ($text eq 'property')	{ $text	= nameProperty(unpack('S', $data)) }			# 13
 	#Lists (7) require some special handling, as they are recursive
-	if (namePropertyType($type) eq 'list'){
+	if ($text eq 'list') {
 		#Only the total size is given; each entry has to be read sequentially from the start.
 		my @entries;
 		my $size	= unpack('S', substr($data, 0, 2));
 		my $pos		= 2;
-		while ($pos < $size){
+		while ($pos < $size) {
 			my $entry_type	=	ord(substr($data, $pos));
 			my $entry_data;
 			my $entry_size;
 			$pos++;	# Adjust for typecode
-			if 		(namePropertyType($type) eq 'number') {
+			if 		($Constant_Property_Type[$entry_type] eq 'number') {
 				#Fixed 1 + 4 byte size
 				$entry_data	= substr($data, $pos, 4);
 				$entry_size	= 4;
 			}
-			elsif (	namePropertyType($type) eq 'object'
-				||	namePropertyType($type) eq 'fnaddr'
-				||	namePropertyType($type) eq 'property') {
+			elsif (	$Constant_Property_Type[$entry_type] eq 'object'
+				||	$Constant_Property_Type[$entry_type] eq 'fnaddr'
+				||	$Constant_Property_Type[$entry_type] eq 'property') {
 				#Fixed 1 + 2 byte size
 				$entry_data	= substr($data, $pos, 2);
 				$entry_size	= 2;
 			}
-			elsif (	namePropertyType($type) eq 'nil'
-				||	namePropertyType($type) eq 'true') {
+			elsif (	$Constant_Property_Type[$entry_type] eq 'nil'
+				||	$Constant_Property_Type[$entry_type] eq 'true') {
 				#Fixed 1 + 0 byte size
 				$entry_size	= 0;
 			}
-			elsif (	namePropertyType($type) eq 's-string'
-				||	namePropertyType($type) eq 'd-string'
-				||	namePropertyType($type) eq 'list') {
+			elsif (	$Constant_Property_Type[$entry_type] eq 's-string'
+				||	$Constant_Property_Type[$entry_type] eq 'd-string'
+				||	$Constant_Property_Type[$entry_type] eq 'list') {
 				#Variable size;
 				#We need to peek into the element to find the size;
 				#Remember to *not* chop off the size
@@ -1376,7 +1828,7 @@ sub decodeProperty($$) {
 				$entry_data		= substr($data, $pos, $entry_size);
 			}
 			else {
-				die "Illegal list entry: ".namePropertyType($entry_type)." ($entry_type)";
+				die "Illegal list entry: $Constant_Property_Type[$entry_type] ($entry_type)";
 			}
 			$pos 	+= $entry_size; 
 			push @entries, decodeProperty($entry_type, $entry_data);
@@ -1396,15 +1848,15 @@ for (;;) {
 		$Option_Generate	= 1;
 		splice(@ARGV, 0, 1);
 	}
-	elsif($#ARGV >= 0 && $ARGV[0] eq '-a'){			# Aggressive naming
+	elsif($#ARGV >= 0 && $ARGV[0] eq '-a') {			# Aggressive naming
 		$Option_Naming		= 1;
 		splice(@ARGV, 0, 1);
 	}
-	elsif($#ARGV >= 0 && $ARGV[0] eq '-v'){			# Verbose
+	elsif($#ARGV >= 0 && $ARGV[0] eq '-v') {			# Verbose
 		$Option_Verbose		= 1;
 		splice(@ARGV, 0, 1);
 	}
-	elsif($#ARGV >= 0 && $ARGV[0] eq '-m'){			# Minimalist mode
+	elsif($#ARGV >= 0 && $ARGV[0] eq '-m') {			# Minimalist mode
 		$Option_Minimal		= 1;
 		splice(@ARGV, 0, 1);
 	}
@@ -1415,7 +1867,7 @@ die "Use: tads2 [options] file.taf\n$Options" if ($#ARGV != 0);	# Too many unpar
 
 #Determine names to use
 $FileName_Path	= './';	# Default to no directory
-if ($ARGV[0] =~ m/([\w\s]*)\.gam/i){	# Use the name of the input file if possible
+if ($ARGV[0] =~ m/([\w\s]*)\.gam/i) {	# Use the name of the input file if possible
 	$FileName_Path			= $1 . '/'		unless defined $Option_Minimal;
 	$FileName_Generate		= $1 . '.sym'	if defined $Option_Generate;
 	$FileName_Sourcecode	= $1 . '.t';
@@ -1439,11 +1891,12 @@ die "$FileName_Path is not a valid path"	unless -d $FileName_Path;
 
 #Open file handles
 open($File_Log, "> :raw :bytes :unix", $FileName_Path . $FileName_Log) # Use :unix to flush the log as we write to it
-	|| die "$0: can't open " . $FileName_Path . $FileName_Log . " for writing: $!";
+	|| die "$0: can't open $FileName_Path$FileName_Log for writing: $!";
 
 #Process the game archive
 open($File_Bytecode, "< :raw :bytes", $FileName_Bytecode)
 	|| die("Couldn't open $FileName_Bytecode for reading.");
+preloadConstants();								# Populate arrays with TADS2 constants
 parseHeader();									# Read header and determine version/type of file
 parseFile();									# Parse the input file into the local data structures
 close($File_Bytecode);
@@ -1453,7 +1906,7 @@ analyze();
 generateMapping() if $Option_Generate;			# Generate symbol file if called for
 
 open($File_Sourcecode, "> :raw :bytes", $FileName_Path . $FileName_Sourcecode)
-	|| die "$0: can't open " . $FileName_Path . $FileName_Sourcecode . "for writing: $!";
+	|| die "$0: can't open $FileName_Path$FileName_Sourcecode for writing: $!";
 printSource();									# Print TADS source based on bytecode
 
 #Close file output
