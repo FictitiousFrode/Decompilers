@@ -2,9 +2,11 @@ use strict;					# 'Safest' operation level
 use warnings;				# Give warnings
 use File::Basename;			# Interpreting resource filenames
 use File::Path 'make_path';	# Creating directories for resources
+use Data::Dumper;			# Dumping data structures
+use Carp;					# For stack tracing at errors
 
 ##Version History
-my $Decompiler_Version		= 0.7;
+my $Decompiler_Version		= 0.8;
 #v0.1:	Initial structure for flow and storage
 #v0.2:	Parsing of data blocks (Headers + XSI/OBJ/RES)
 #v0.3:	Generation and parsing of symbol file
@@ -185,15 +187,15 @@ sub preloadConstants() {
 	$Constant_Opcode_Payload[0x10]	= ['NONE'];							# 16	OPCLE
 	$Constant_Opcode_Payload[0x11]	= ['UINT8', 'OBJECT'];				# 17	OPCCALL
 	$Constant_Opcode_Payload[0x12]	= ['UINT8', 'PROPERTY'];			# 18	OPCGETP
-	$Constant_Opcode_Payload[0x13]	= ['UNKNOWN'];						# 19	OPCGETPDATA
+	$Constant_Opcode_Payload[0x13]	= ['UINT8', 'PROPERTY'];			# 19	OPCGETPDATA		Experimental based on 0x12
 	$Constant_Opcode_Payload[0x14]	= ['LOCAL'];						# 20	OPCGETLCL
-	$Constant_Opcode_Payload[0x15]	= ['UNKNOWN'];						# 21	OPCPTRGETPDATA
+	$Constant_Opcode_Payload[0x15]	= ['UINT8'];						# 21	OPCPTRGETPDATA	Experimental based on 0x28
 	$Constant_Opcode_Payload[0x16]	= ['UNKNOWN2'];						# 22	OPCRETURN
 	$Constant_Opcode_Payload[0x17]	= ['UNKNOWN2'];						# 23	OPCRETVAL
-	$Constant_Opcode_Payload[0x18]	= ['LOCAL'];						# 24	OPCENTER
+	$Constant_Opcode_Payload[0x18]	= ['UINT16'];						# 24	OPCENTER
 	$Constant_Opcode_Payload[0x19]	= ['NONE'];							# 25	OPCDISCARD
 	$Constant_Opcode_Payload[0x1A]	= ['OFFSET'];						# 26	OPCJMP
-	$Constant_Opcode_Payload[0x1B]	= ['OFFSET']	;					# 27	OPCJF
+	$Constant_Opcode_Payload[0x1B]	= ['OFFSET'];						# 27	OPCJF
 	$Constant_Opcode_Payload[0x1C]	= ['NONE'];							# 28	OPCPUSHSELF
 	$Constant_Opcode_Payload[0x1D]	= ['STRING'];						# 29	OPCSAY
 	$Constant_Opcode_Payload[0x1E]	= ['UINT8', 'BUILTIN'];				# 30	OPCBUILTIN
@@ -201,10 +203,10 @@ sub preloadConstants() {
 	$Constant_Opcode_Payload[0x20]	= ['LIST'];							# 32	OPCPUSHLST
 	$Constant_Opcode_Payload[0x21]	= ['NONE'];							# 33	OPCPUSHNIL
 	$Constant_Opcode_Payload[0x22]	= ['NONE'];							# 34	OPCPUSHTRUE
-	$Constant_Opcode_Payload[0x23]	= ['OBJECT'];						# 35	OPCPUSHFN
-	$Constant_Opcode_Payload[0x24]	= ['UNKNOWN'];						# 36	OPCGETPSELFDATA
+	$Constant_Opcode_Payload[0x23]	= ['FUNCTION'];						# 35	OPCPUSHFN
+	$Constant_Opcode_Payload[0x24]	= ['UINT8', 'PROPERTY'];			# 36	OPCGETPSELFDATA		Experimental based on 0x3C
 	#37 is unused
-	$Constant_Opcode_Payload[0x26]	= ['NONE'];							# 38	OPCPTRCALL
+	$Constant_Opcode_Payload[0x26]	= ['UINT8'];						# 38	OPCPTRCALL
 	$Constant_Opcode_Payload[0x27]	= ['UNKNOWN'];						# 39	OPCPTRINH
 	$Constant_Opcode_Payload[0x28]	= ['UINT8'];						# 40	OPCPTRGETP
 	$Constant_Opcode_Payload[0x29]	= ['PROPERTY'];						# 41	OPCPASS
@@ -227,12 +229,12 @@ sub preloadConstants() {
 	$Constant_Opcode_Payload[0x3A]	= ['UNKNOWN'];						# 58	OPCJNOR
 	$Constant_Opcode_Payload[0x3B]	= ['UNKNOWN'];						# 59	OPCJT
 	$Constant_Opcode_Payload[0x3C]	= ['UINT8', 'PROPERTY'];			# 60	OPCGETPSELF
-	$Constant_Opcode_Payload[0x3D]	= ['UNKNOWN'];						# 61	OPCGETPSLFD
+	$Constant_Opcode_Payload[0x3D]	= ['UINT8', 'PROPERTY'];			# 61	OPCGETPSLFD		Experimental based on 0x3C
 	$Constant_Opcode_Payload[0x3E]	= ['UINT8', 'OBJECT', 'PROPERTY'];	# 62	OPCGETPOBJ
-	$Constant_Opcode_Payload[0x3F]	= ['UNKNOWN'];						# 63	OPCGETPOBJD
+	$Constant_Opcode_Payload[0x3F]	= ['UINT8', 'OBJECT', 'PROPERTY'];	# 63	OPCGETPOBJD		Experimental based on 0x3E
 	$Constant_Opcode_Payload[0x40]	= ['NONE'];							# 64	OPCINDEX
 	#65-66 are unused
-	$Constant_Opcode_Payload[0x43]	= ['PROPERTY'];						# 67	OPCPUSHPN
+	$Constant_Opcode_Payload[0x43]	= ['POINTER'];						# 67	OPCPUSHPN
 	$Constant_Opcode_Payload[0x44]	= ['OFFSET'];						# 68	OPCJST
 	$Constant_Opcode_Payload[0x45]	= ['OFFSET'];						# 69	OPCJSF
 	$Constant_Opcode_Payload[0x46]	= ['UNKNOWN'];						# 70	OPCJMPD
@@ -293,6 +295,7 @@ my @Translate_Property_Local	= ();
 #Namings
 sub nameAction($) {
 	my $id = shift;
+	croak unless defined $id;
 	return $Translate_Action[$id]	if defined $Translate_Action[$id];
 	return "Action$id";
 }
@@ -303,36 +306,42 @@ sub nameBuiltin($) {
 }
 sub nameObject($) {
 	my $id = shift;
-	return 'nullObj'				if ($id eq $Null_Value);
+	return 'nullObj'					unless defined $id;
+	return 'nullObj'					if $id eq $Null_Value;
 	return $Translate_Object_Name[$id]	if defined $Translate_Object_Name[$id];
 	return "Obj$id";
 }
 sub nameProperty($) {
 	my $id = shift;
-	return 'nullprop'				if (not defined $id || $id eq $Null_Value);
+	return 'nullprop'				unless defined $id;
+	return 'nullprop'				if $id eq $Null_Value;
 	return $Translate_Property[$id] if defined $Translate_Property[$id];
 	return "prop$id";
 }
 sub nameLocal($$) {
 	my $id		= shift;	# Negative for object functions, positive for properties
-	my $local	= shift;	# Negative for arguments, positive for locals
-	if ($id > 0) {	# Properties
-		return $Translate_Property_Local[$id][$local - 1]	if defined $Translate_Property_Local[$id][$local - 1];
-	} else {		# Functions
-		return $Translate_Object_Local[-$id][$local - 1]	if defined $Translate_Object_Local[-$id][$local - 1];
+	my $value	= shift;	# Negative for arguments, positive for locals
+	# Arg1 is stored at index 0, etc
+	if ($value > 0) {
+		my $local	= $value;
+		if ($id > 0) {	# Properties
+			return $Translate_Property_Local[$id][$local - 1]	if defined $Translate_Property_Local[$id][$local - 1];
+		}
+		else {			# Functions
+			return $Translate_Object_Local[-$id][$local - 1]	if defined $Translate_Object_Local[-$id][$local - 1];
+		}
+		return "local$local";
 	}
-	return "local$local";
+	else {
+		my $arg		= -1 * $value;
+		if ($id > 0) {	# Properties
+			return $Translate_Property_Argument[$id][$arg - 1]	if defined $Translate_Property_Argument[$id][$arg - 1];
+		}
+		else {			# Functions
+			return $Translate_Object_Argument[-$id][$arg - 1]	if defined $Translate_Object_Argument[-$id][$arg - 1];
+		}
+		return "arg$arg";
 	}
-# Arguments; arg1 is stored at index 0, etc
-sub nameArgument($$) {
-	my $id		= shift;	# Negative for object functions, positive for properties
-	my $arg		= shift;
-	if ($id > 0) {	# Properties
-		return $Translate_Property_Argument[$id][$arg - 1]	if defined $Translate_Property_Argument[$id][$arg - 1];
-	} else {		# Functions
-		return $Translate_Object_Argument[-$id][$arg - 1]	if defined $Translate_Object_Argument[-$id][$arg - 1];
-	}
-	return "arg$arg";
 }
 #Mapping File Handling
 sub preloadMapping() {
@@ -411,7 +420,6 @@ sub preloadMapping() {
 	$Translate_Property_Argument[33] = ['actor', 'prep', 'dobj'];					# validIoList
 	$Translate_Property_Argument[34] = ['actor', 'verb', 'dobj', 'prep'];			# iobjGen
 	$Translate_Property_Argument[35] = ['actor', 'verb', 'iobj', 'prep'];			# dobjGen
-	# BUGFIX: #36 (undefined) was missing
 	$Translate_Property_Argument[37] = ['prep'];									# rejectMultiDobj
 	$Translate_Property_Argument[38] = ['dest'];									# moveInto
 	$Translate_Property_Argument[47] = ['num'];										# anyvalue
@@ -623,7 +631,7 @@ sub debug($;$) {
 		my $byte	= ord($char);
 		$char		= '' if $byte > 128 || $byte < 32;
 		my $int		= '';
-		$int		= unpack('S', substr($block, $i, 2)) if $i < ($size-1);
+		$int		= unpack('s', substr($block, $i, 2)) if $i < ($size-1);
 		print $File_Log "\t$i\t$byte\t$char\t$int\n"
 	}
 }
@@ -903,7 +911,7 @@ sub parseBlockREQ($) {
 		warn $message;
 		$found	= $#req_names + 1;
 	}
-	for my $i(0 .. $found) {
+	for my $i(0 .. $found - 1) {
 		my $object	= unpack('S', substr($block, $i * 2, 2));
 		unless ($object eq $Null_Value) {
 			print $File_Log	"\t$i:\tObj$object\t($req_names[$i])\n" if $Option_Verbose;
@@ -1005,6 +1013,7 @@ sub parseBlockRES($) {
 	print $File_Log "\t$entries Entries\n";
 	#Read metadata and embedded data for each entry in one pass
 	my $pos		= 8;
+	print 	"Extracting $entries Resources...\n" if $entries;
 	for my $i (1 .. $entries) {
 		#Metadata
 		my $data_pos	= unpack('L', substr($block, $pos, 4));
@@ -1019,7 +1028,7 @@ sub parseBlockRES($) {
 			make_path($path);
 			my $file_resource;
 			open($file_resource, "> :raw :bytes", $FileName_Path . $name)
-				|| die "$0: can't open ".$FileName_Path . $name . " in write-open mode: $!";
+				|| die "$0: can't open $FileName_Path$name in write-open mode: $!";
 			print $file_resource substr($block, $data_pos + $offset, $size);
 			close $file_resource;
 		}
@@ -1034,8 +1043,10 @@ sub analyze() {
 	#We do this after actions because the action naming often gives better results.
 	print $File_Log "Analyzing Vocabulary\n";
 	analyzeVocabulary();
+	#Look through the function code, converting the bytecode into an array of instructions
 	print $File_Log "Analyzing Function Code Segments\n";
 	analyzeFunctionCode();
+	#Look through the property code, converting the bytecode into an array of instructions
 	print $File_Log "Analyzing Property Code Segments\n";
 	analyzePropertyCode();
 }
@@ -1280,7 +1291,7 @@ sub analyzeFunctionCode() {
 			warn "$obj: Code already analyzed";
 			return;
 		}	
-		$Objects[$obj]{decoded}	= analyzeCodeblock(-$obj, $codeblock);	# Note the negative ID for object function code
+		$Objects[$obj]{instructions}	= analyzeCodeblock(-$obj, $codeblock);	# Note the negative ID for object function code
 	}
 }
 #Look through all objects, analyzing the code segments of code properties
@@ -1311,7 +1322,7 @@ sub analyzePropertyCode() {
 				warn "$prop: Code already analyzed";
 				next;
 			}
-			$Objects[$obj]{properties}{$prop}{decoded}	= analyzeCodeblock($prop, $codeblock);	# Note the positive ID for property code
+			$Objects[$obj]{properties}{$prop}{instructions}	= analyzeCodeblock($prop, $codeblock);	# Note the positive ID for property code
 		}
 	}
 }
@@ -1330,28 +1341,29 @@ sub analyzeCodeblock($$) {
 	my $exclusion_start		= $length;
 	my $exclusion_end		= $length;
 	#Make a log header if needed
-	print $File_Log	"\tObj".(-$id)."\t$length\n"	if $id < 0 && defined $Option_Verbose;
-	print $File_Log	"\tProp$id\t$length\n"			if $id > 0 && defined $Option_Verbose;
+	print $File_Log	"\tObj".(-$id).":\t$length\n"	if $id < 0 && defined $Option_Verbose;
+	print $File_Log	"\tProp$id:\t$length\n"			if $id > 0 && defined $Option_Verbose;
 	while ($pos < $length) {
 		my %instruction	= %{ analyzeOpcode($id, $codeblock, $pos) };
 		push @instructions, \%instruction;
 		#Read the opcode
 		my $opcode	= $instruction{opcode};
 		my $size	= $instruction{size};
+		my $payload	= arrayString($instruction{payload});
 		#All valid opcodes below 192 are defined in the Constant_Opcode list
 		unless (defined $Constant_Opcode[$opcode] || $opcode >= 192) {
 			my $bytes = $length - ($pos + $size);
 			print $File_Log	"\tObj".(-$id)."\n"	if $id < 0 && not defined $Option_Verbose;
 			print $File_Log	"\tProp$id\n"		if $id > 0 && not defined $Option_Verbose;
 			print $File_Log	"\t\t$pos\tUnknown opcode $opcode - possible junk code ($bytes/$length left)\n";
-			debug($codeblock)					if defined $Option_Verbose;
+#			debug($codeblock)					if defined $Option_Verbose;
 			return \@instructions;
 		}
-		print $File_Log	"\t\t$pos\t$opcode - $Constant_Opcode[$opcode] ($size bytes)\n"	if $Option_Verbose && $opcode < 192;
+		print $File_Log	"\t\t$pos\t$opcode - $Constant_Opcode[$opcode] ($size bytes):\t$payload\n"	if $Option_Verbose && $opcode < 192;
 		print $File_Log	"\t\t$pos\t$opcode - Assignment ($size bytes)\n"	if $Option_Verbose && $opcode >= 192;
 		$pos += $size;
 		#If we got a switch table, remember to skip over it later on.
-		if ($opcode eq 75) {
+		if ($opcode eq 0x4B) {
 			my $start	= $instruction{switch_start};
 			my $end		= $instruction{switch_end};
 			push @exclusion_intervals, {
@@ -1382,6 +1394,7 @@ sub analyzeCodeblock($$) {
 			$exclusion_end		= $next_exclusion_end;
 		}
 	}
+	return \@instructions;
 }
 #Analyzes a codeblock at a given position to find the resulting instruction
 #Called recursively for SWITCH statements.
@@ -1396,6 +1409,7 @@ sub analyzeOpcode($$$) {
 	my %instruction	= ();
 	$instruction{pos}		= $pos;
 	$instruction{opcode}	= $opcode;
+	$instruction{name}		= $Constant_Opcode[$opcode];
 	#Opcodes 192 and above are reserved for assignment, which is handled in a special way
 	if ($opcode < 192) {
 		#Some tads compilations contain unused "junk code"
@@ -1422,9 +1436,21 @@ sub analyzeOpcode($$$) {
 				$size+=2;
 				push @payload, $value;
 			}
+			elsif ($template eq 'UINT8') {
+				#Number embedded as UINT8
+				my $value	= ord(substr($codeblock, $pos + $size, 1));
+				$size++;
+				push @payload, $value;
+			}
 			elsif ($template eq 'OBJECT') {
 				#Object ID stored as UINT16
 				my $value	= decodeProperty(2, substr($codeblock, $pos + $size, 2));
+				$size+=2;
+				push @payload, $value;
+			}
+			elsif ($template eq 'FUNCTION') {
+				#Object ID stored as UINT16
+				my $value	= decodeProperty(10, substr($codeblock, $pos + $size, 2));
 				$size+=2;
 				push @payload, $value;
 			}
@@ -1434,9 +1460,15 @@ sub analyzeOpcode($$$) {
 				$size+=2;
 				push @payload, $value;
 			}
+			elsif ($template eq 'POINTER') {
+				#Property ID stored as UINT16
+				my $value	= '&'.decodeProperty(13, substr($codeblock, $pos + $size, 2));
+				$size+=2;
+				push @payload, $value;
+			}
 			elsif ($template eq 'LOCAL') {
-				#Local variable ID stored as UINT16
-				my $value	= nameLocal($id, unpack('S', substr($codeblock, $pos + $size, 2)));
+				#Local variable ID stored as INT16
+				my $value	= nameLocal($id, unpack('s', substr($codeblock, $pos + $size, 2)));
 				$size+=2;
 				push @payload, $value;
 			}
@@ -1452,23 +1484,19 @@ sub analyzeOpcode($$$) {
 				$size+=2;
 				push @payload, $value;
 			}
-			elsif ($template eq 'UINT8') {
-				#Number stored as UINT8
-				my $value	= ord(substr($codeblock, $pos + $size, 1));
-				$size++;
-				push @payload, $value;
-			}
 			elsif ($template eq 'STRING') {
 				#String stored as a UINT16 denoting the total length
 				my $length	= unpack('S', substr($codeblock, $pos + $size, 2));
-				my $value	= decodeProperty(3, substr($codeblock, $pos + $size, $length));
+				my $value	= decodeProperty(9, substr($codeblock, $pos + $size, $length));
 				$size+=$length;
 				push @payload, $value;
 			}
 			elsif ($template eq 'LIST') {
 				#List stored as a UINT16 denoting the total length
 				my $length	= unpack('S', substr($codeblock, $pos + $size, 2));
-				my $value	= decodeProperty(7, substr($codeblock, $pos + $size, $length));
+				#Code for handling junk code that's interpreted as OPCPUSHLST (0x20)
+				my $value	= '[LISTERROR]';
+				$value		= decodeProperty(7, substr($codeblock, $pos + $size, $length)) unless $pos + $length > length $codeblock;
 				$size+=$length;
 				push @payload, $value;
 			}
@@ -1495,11 +1523,11 @@ sub analyzeOpcode($$$) {
 				for (my $entry=0 ; $entry<$entries ; $entry++){
 					my %switch_op		= %{ analyzeOpcode($id, $codeblock, $subpos) };
 					$subpos				+= $switch_op{size};
-					$switch_op{target}	= $subpos + unpack('S', substr($codeblock, $subpos, 2));
+					$switch_op{target}	= $subpos + unpack('s', substr($codeblock, $subpos, 2));
 					$subpos+=2;
 					push @payload, \%switch_op;
 				}
-				$instruction{switch_default}	= $subpos + unpack('S', substr($codeblock, $subpos, 2));
+				$instruction{switch_default}	= $subpos + unpack('s', substr($codeblock, $subpos, 2));
 				$subpos+=2;
 				$instruction{switch_end}	= $subpos;
 			}
@@ -1516,45 +1544,24 @@ sub analyzeOpcode($$$) {
 	}
 	else {
 		#Assignment opcodes are handled as a bitflag
-		#0-1	Destination type
-		#	00	LOCAL	UINT16	embedded
-		#	01	OBJECT	UINT16	embedded
-		#	10	(index, list)	from stack
-		#	11	(prop, obj)		from stack
-		#2-4	Operation type
-		#	000		:=	direct assignment
-		#	001		+=	add tos to destination
-		#	010		-=	subtract tos from destination
-		#	011		*=	multiply destination by tos
-		#	100		/=	divide destination by tos
-		#	101		++	increment tos
-		#	110		--	decrement tos
-		#	111			extension flag
-		#5	Destinationtype
-		#	0	leave on stack (implies pre increment/decrement)
-		#	1	discard (implies post increment/decrement)			
-		#6-7	Reserved, indicating assignment opcode
-		#If extension flag is set, contains an extra byte:
-		#	1	modulo and assign
-		#	2	binary AND and assign
-		#	3	binary OR and assign
-		#	4	binary XOR and assign
-		#	5	shift left and assign
-		#	6	shift right and assign
+		if    (($opcode & 0x03) eq 0x00){
+			#Local ID embedded as INT16
+			my $value	= nameLocal($id, unpack('s', substr($codeblock, $pos + $size, 2)));
+			$size+=2;
+			push @payload, $value;
+		}
+		elsif (($opcode & 0x03) eq 0x01){
+			#Object ID embedded as INT16
+			my $value	= nameObject(unpack('s', substr($codeblock, $pos + $size, 2)));
+			$size+=2;
+			push @payload, $value;
+		}
 		if    (($opcode & 0x03) eq 0x1c) {
 			#Extended opcode
 			my $value	= ord(substr($codeblock, $pos + $size, 1));
 			$size++;
 			push @payload, $value;
 		}
-		if    (($opcode & 0x03) eq 0x00
-			|| ($opcode & 0x03) eq 0x01) {
-			# Destination embedded as INT16
-			my $value	= unpack('s', substr($codeblock, $pos + $size, 2));
-			$size+=2;
-			push @payload, $value;
-		}
-		print $File_Log	"\t\t$pos\t$opcode - Assignment ($size bytes)\n"	if $Option_Verbose;
 		return {
 			pos		=> $pos,
 			opcode	=> $opcode,
@@ -1635,6 +1642,78 @@ sub arrayString($;$) {
 	}
 	return $text;
 }
+#Decode a property given it's type; lists need to be interpreted recursively
+sub decodeProperty($$);
+sub decodeProperty($$) {
+	my $type	= shift;
+	my $data	= shift;
+	croak "Can't decode without type"	unless defined $type;
+	croak "Can't decode empty data"	unless defined $data;
+	#Default value is the name of the property; This covers:
+	# 4	BASEPTR
+	# 5	NIL		type is the same as value
+	# 6	CODE	Code is too long to print; use decodeCode for detailed code breakdown
+	# 8	TRUE	type is the same as value
+	#11	TPL
+	#14	DEMAND
+	#15	SYNONYM
+	#16	REDIR
+	#17	TPL2
+	my $text	= $Constant_Property_Type[$type];
+	if ($text eq 'number')		{ $text	= unpack('l', $data) }							# 1
+	if ($text eq 'object')		{ $text	= nameObject(unpack('S', $data)) }				# 2
+	if ($text eq 's-string')	{ $text	= "'".substr($data, 2)."'" }					# 3
+	if ($text eq 'd-string')	{ $text	= '"'.substr($data, 2).'"' }					# 9
+	if ($text eq 'fnaddr')		{ $text	= '&'.nameObject(unpack('S', $data)) }			# 10
+	if ($text eq 'property')	{ $text	= nameProperty(unpack('S', $data)) }			# 13
+	#Lists (7) require some special handling, as they are recursive
+	if ($text eq 'list') {
+		#Only the total size is given; each entry has to be read sequentially from the start.
+		my @entries;
+		my $size	= unpack('S', substr($data, 0, 2));
+		my $pos		= 2;
+		while ($pos < $size) {
+			my $entry_type	=	ord(substr($data, $pos));
+			my $entry_data;
+			my $entry_size;
+			$pos++;	# Adjust for typecode
+			if 		($Constant_Property_Type[$entry_type] eq 'number') {
+				#Fixed 1 + 4 byte size
+				$entry_data	= substr($data, $pos, 4);
+				$entry_size	= 4;
+			}
+			elsif (	$Constant_Property_Type[$entry_type] eq 'object'
+				||	$Constant_Property_Type[$entry_type] eq 'fnaddr'
+				||	$Constant_Property_Type[$entry_type] eq 'property') {
+				#Fixed 1 + 2 byte size
+				$entry_data	= substr($data, $pos, 2);
+				$entry_size	= 2;
+			}
+			elsif (	$Constant_Property_Type[$entry_type] eq 'nil'
+				||	$Constant_Property_Type[$entry_type] eq 'true') {
+				#Fixed 1 + 0 byte size
+				$entry_size	= 0;
+				$entry_data	= '';
+			}
+			elsif (	$Constant_Property_Type[$entry_type] eq 's-string'
+				||	$Constant_Property_Type[$entry_type] eq 'd-string'
+				||	$Constant_Property_Type[$entry_type] eq 'list') {
+				#Variable size;
+				#We need to peek into the element to find the size;
+				#Remember to *not* chop off the size
+				$entry_size 	= unpack('S', substr($data, $pos, 2));
+				$entry_data		= substr($data, $pos, $entry_size);
+			}
+			else {
+				die "Illegal list entry: $Constant_Property_Type[$entry_type] ($entry_type)";
+			}
+			$pos 	+= $entry_size;
+			push @entries, decodeProperty($entry_type, $entry_data);
+		}
+		$text = "[".arrayString(\@entries)."]";
+	}
+	return $text;
+}
 ##Output
 #Generate and print the corresponding TADS source code
 sub printSource() {
@@ -1644,31 +1723,28 @@ sub printSource() {
 	#TODO: compoundwords
 	#TODO: specialwords
 	#Print objects, one type at a time
-	print $File_Sourcecode "\n//\t## Functions ##\n";
+	print $File_Sourcecode "\n\n//\t## Function Definitions ##\n";
+	#Forward-declare all functions, with naming
 	for my $obj (0 .. $#Objects) {
 		next unless( defined $Objects[$obj]);	#Not all objects are used
 		my $type	= $Objects[$obj]{type};
-		printFunctionSource($obj)	if ($type eq 1);	# Functions
+		print $File_Sourcecode nameObject($obj) . ": function;\n"			if ($type eq 1);	# Functions
+		print $File_Sourcecode "\t//\tObj$obj\t = '".nameObject($obj)."'\n"	if ($type eq 1);	# Functions
 	}
-	print $File_Sourcecode "\n//\t## Objects ##\n";
+	print $File_Sourcecode "\n\n//\t## Function Source ##\n";
+	print $File_Log "Printing Function Source\n";
+	for my $obj (0 .. $#Objects) {
+		next unless( defined $Objects[$obj]);	#Not all objects are used
+		my $type	= $Objects[$obj]{type};
+		printInstructions(-$obj, $Objects[$obj]{instructions})				if ($type eq 1);	# Functions
+	}
+	print $File_Log "Printing Object Source\n";
+	print $File_Sourcecode "\n\n//\t## Objects ##\n";
 	for my $obj (0 .. $#Objects) {
 		next unless( defined $Objects[$obj]);	#Not all objects are used
 		my $type	= $Objects[$obj]{type};
 		printObjectSource($obj)		if ($type eq 2);	# Meta-Objects
 	}
-}
-#Generate and print the source for a function object 
-sub printFunctionSource($) {
-	my $obj	= shift;
-	#Function header
-	print $File_Sourcecode nameObject($obj) . ": function";
-	#TODO: Arguments
-	print $File_Sourcecode "{\n";
-	#Decode information
-	print $File_Sourcecode	"\t//\tObj$obj\t = '".nameObject($obj)."'\n";
-	#TODO: Function code
-	print $File_Sourcecode "\tTODO Code for function\n";
-	print $File_Sourcecode "}\n";
 }
 #Generate and print the source for a meta-object 
 sub printObjectSource($) {
@@ -1720,10 +1796,15 @@ sub printObjectSource($) {
 			elsif	($Constant_Property_Type[$prop_type] eq 'synonym') {
 				my $property_target	= unpack('S', $prop_data);
 				my $action_type		= substr(nameProperty($prop), 0, 2);
-				my $action_target	= nameAction($Property_Actions{$property_target});
-				my $action_this		= nameAction($Property_Actions{$prop});				
-				undef $action_type	unless $action_type eq 'do' || $action_type eq 'io';
-				print $File_Sourcecode "\t" . $action_type . "Synonym('$action_target')\t= '$action_this'\n" if $action_type;
+				if (defined $Property_Actions{$prop}){
+					my $action_target	= nameAction($Property_Actions{$property_target});
+					my $action_this		= nameAction($Property_Actions{$prop});				
+					undef $action_type	unless $action_type eq 'do' || $action_type eq 'io';
+					print $File_Sourcecode "\t" . $action_type . "Synonym('$action_target')\t= '$action_this'\n" if $action_type;
+				}
+				else {
+					print $File_Log "\tSynonym for unknown action at Prop$prop referencing Prop$property_target\n";
+				}
 			}
 			elsif	($Constant_Property_Type[$prop_type] eq 'redir') {
 				my $action_type		= substr(nameProperty($prop), 0, 2);
@@ -1750,8 +1831,7 @@ sub printObjectSource($) {
 				}
 			}
 			elsif	($Constant_Property_Type[$prop_type] eq 'code') {
-				print $File_Sourcecode "\t"
-					.nameProperty($prop)."\t= Code-TODO\n";
+				printInstructions($prop, $Objects[$obj]{properties}{$prop}{instructions});
 			}
 			else {
 				#Works for NUMBER, SSTRING, DSTRING, OBJECT, PROPNUM, FNADDR, NIL, TRUE, DAT_LIST
@@ -1764,78 +1844,988 @@ sub printObjectSource($) {
 		}
 	}
 }
-
-##Decoding
-#Decode a property given it's type; lists need to be interpreted recursively
-sub decodeProperty($$);
-sub decodeProperty($$) {
-	my $type	= shift;
-	my $data	= shift;
-	die "Can't decode without type"	unless defined $type;
-	die "Can't decode empty data"	unless defined $data;
-	#Default value is the name of the property; This covers:
-	# 4	BASEPTR
-	# 5	NIL		type is the same as value
-	# 6	CODE	Code is too long to print; use decodeCode for detailed code breakdown
-	# 8	TRUE	type is the same as value
-	#11	TPL
-	#14	DEMAND
-	#15	SYNONYM
-	#16	REDIR
-	#17	TPL2
-	my $text	= $Constant_Property_Type[$type];
-	if ($text eq 'number')		{ $text	= unpack('l', $data) }							# 1
-	if ($text eq 'object')		{ $text	= nameObject(unpack('S', $data)) }				# 2
-	if ($text eq 's-string')	{ $text	= "'".substr($data, 2)."'" }					# 3
-	if ($text eq 'd-string')	{ $text	= '"'.substr($data, 2).'"' }					# 9
-	if ($text eq 'fnaddr')		{ $text	= '&'.nameObject(unpack('S', $data)) }			# 10
-	if ($text eq 'property')	{ $text	= nameProperty(unpack('S', $data)) }			# 13
-	#Lists (7) require some special handling, as they are recursive
-	if ($text eq 'list') {
-		#Only the total size is given; each entry has to be read sequentially from the start.
-		my @entries;
-		my $size	= unpack('S', substr($data, 0, 2));
-		my $pos		= 2;
-		while ($pos < $size) {
-			my $entry_type	=	ord(substr($data, $pos));
-			my $entry_data;
-			my $entry_size;
-			$pos++;	# Adjust for typecode
-			if 		($Constant_Property_Type[$entry_type] eq 'number') {
-				#Fixed 1 + 4 byte size
-				$entry_data	= substr($data, $pos, 4);
-				$entry_size	= 4;
+sub printInstructions($){
+	my $id	= shift;	
+	my $ref	= shift;
+	#Virtual Machine Simulation
+	my @instructions	= @{ $ref };
+	my @stack			= ();	# The current stack
+	my @lines			= ();	# The lines so far 
+	my @branching		= ();	# Keeping track of code branching
+	my $label			= 0;	# The code position where text was last pushed
+	# Negative ID for object functions, positive for properties
+	my $mode_obj;
+	my $mode_prop;
+	$mode_obj		= 1			if $id < 0;
+	$mode_prop		= 1			if $id > 0;
+	my $print_id;
+	$print_id		= "Obj".(-$id)		if $mode_obj;
+	$print_id		= "Prop$id"			if $mode_prop;
+	print $File_Log "\t$print_id:\n"	if $Option_Verbose;
+	#function header
+	my $function_arguments	= 0;
+	my $function_locals		= 0;
+	push @branching, { 
+		type	=> 'MAIN',
+		start	=> 0,
+		end		=> $instructions[$#instructions]{pos}
+	};
+	for (my $instruction=0 ; $instruction<$#instructions ; $instruction++){
+		#Read instruction details
+		my $opcode		= $instructions[$instruction]{opcode};
+		my $pos			= $instructions[$instruction]{pos};
+		my $next_label	= $instructions[$instruction]{size} + $pos;
+		my @payload		= @{ $instructions[$instruction]{payload} };
+		#Flag for fatal error in parsing
+		my $fatal;
+		#Property Assignments
+		if	($opcode >= 192) {		# Bitflag encoded assignment
+			#0-1	Variable type	0x03
+			#	00	LOCAL	embedded(UINT16)
+			#	01	PROP	embedded(UINT16) applied to object from stack
+			#	10	(index, list)	from stack
+			#	11	(prop, obj)		from stack
+			my $variable;
+			my $variable_mask	= $opcode & 0x03;
+			if ($variable_mask eq 0x00) {
+				#Local, stored in payload
+				$variable		= shift @payload;
 			}
-			elsif (	$Constant_Property_Type[$entry_type] eq 'object'
-				||	$Constant_Property_Type[$entry_type] eq 'fnaddr'
-				||	$Constant_Property_Type[$entry_type] eq 'property') {
-				#Fixed 1 + 2 byte size
-				$entry_data	= substr($data, $pos, 2);
-				$entry_size	= 2;
+			if ($variable_mask eq 0x01) {
+				my $property	= shift @payload;
+				#Object from stack, property from payload
+				my $obj_ref		= pop @stack;
+				my $object		= 'nil';
+				my $precedence	= 14;
+				$object			= %{ $obj_ref }{value}		if defined $obj_ref;
+				$precedence		= %{ $obj_ref }{precedence}	if defined $obj_ref;
+				$object			= "($object)" if $precedence < 13;
+				$variable		=	$object . '.' . $property;
 			}
-			elsif (	$Constant_Property_Type[$entry_type] eq 'nil'
-				||	$Constant_Property_Type[$entry_type] eq 'true') {
-				#Fixed 1 + 0 byte size
-				$entry_size	= 0;
+			if ($variable_mask eq 0x02) {
+				#Index from stack applied to list from stack
+				my $index_ref	= pop @stack;
+				my $index		= 'nil';
+				$index			= %{ $index_ref }{value}		if defined $index_ref;
+				my $list_ref	= pop @stack;
+				my $list		= 'nil';
+				my $precedence	= 14;
+				$list			= %{ $list_ref }{value}			if defined $list_ref;
+				$precedence		= %{ $list_ref }{precedence}	if defined $list_ref;
+				$list			= "($list)" if $precedence < 13;
+				$variable		= $list . '[' . $index . ']';
 			}
-			elsif (	$Constant_Property_Type[$entry_type] eq 's-string'
-				||	$Constant_Property_Type[$entry_type] eq 'd-string'
-				||	$Constant_Property_Type[$entry_type] eq 'list') {
-				#Variable size;
-				#We need to peek into the element to find the size;
-				#Remember to *not* chop off the size
-				$entry_size 	= unpack('S', substr($data, $pos, 2));
-				$entry_data		= substr($data, $pos, $entry_size);
+			if ($variable_mask eq 0x03) {
+				#Property from stack applied to object from stack
+				my $prop_ref	= pop @stack;
+				my $property	= 'nil';
+				$property		= %{ $prop_ref }{value}		if defined $prop_ref;
+				my $obj_ref		= pop @stack;
+				my $object		= 'nil';
+				my $precedence	= 14;
+				$object			= %{ $obj_ref }{value}			if defined $obj_ref;
+				$precedence		= %{ $obj_ref }{precedence}		if defined $obj_ref;
+				$object			= "($object)" if ($precedence < 13);
+				$variable		= $object . '(' . $property . ')';
+			}
+			#2-4	Operation type	0x1c
+			#	000		:=	direct assignment
+			#	001		+=	add tos to variable
+			#	010		-=	subtract tos from variable
+			#	011		*=	multiply variable by tos
+			#	100		/=	divide variable by tos
+			#	101		++	increment tos
+			#	110		--	decrement tos
+			#	111			extension flag
+			my $operator_mask		= $opcode & 0x1C;
+			my $operator;
+			$operator	= ':='	if $operator_mask eq 0x00;
+			$operator	= '+='	if $operator_mask eq 0x04;
+			$operator	= '-='	if $operator_mask eq 0x08;
+			$operator	= '*='	if $operator_mask eq 0x0C;
+			$operator	= '/='	if $operator_mask eq 0x10;
+			$operator	= '++'	if $operator_mask eq 0x14;
+			$operator	= '--'	if $operator_mask eq 0x18;
+			#If extension flag is set, contains an extra byte:
+			#	1	%=	modulo and assign
+			#	2	&=	binary AND and assign
+			#	3	|=	binary OR and assign
+			#	4	^=	binary XOR and assign
+			#	5	<<=	shift left and assign
+			#	6	>>=	shift right and assign
+			if ($operator_mask eq 0x1c){
+				my $extended	= shift @payload;
+				$operator	= '%='	if $extended eq 1;
+				$operator	= '&='	if $extended eq 2;
+				$operator	= '|='	if $extended eq 3;
+				$operator	= '^='	if $extended eq 4;
+				$operator	= '<<='	if $extended eq 5;
+				$operator	= '>>='	if $extended eq 6;
+			}
+			#5	Destinationtype
+			#	0	leave on stack	implies pre increment/decrement
+			#	1	discard 		implies post increment/decrement
+			my $destination_mask	= $opcode & 0x20;
+			#Get the value to modify by, and build the assignment
+			my $assignment;
+			my $precedence;
+			if ($operator eq '++' || $operator eq '--'){
+				#Implied value operator
+				#Discard flag indicates post or pre assignment
+				$assignment		= "$operator$variable" if $destination_mask;
+				$assignment		= "$variable$operator" unless $destination_mask;
+				$precedence		= 12;
 			}
 			else {
-				die "Illegal list entry: $Constant_Property_Type[$entry_type] ($entry_type)";
+				#Get value from stack
+				my $value_ref	= pop @stack;
+				my $value		= 'nil';
+				$value			= %{ $value_ref }{value}		if defined $value_ref;
+				$assignment		= "$variable\t$operator $value";
+				$precedence		= 0;
 			}
-			$pos 	+= $entry_size; 
-			push @entries, decodeProperty($entry_type, $entry_data);
+			#Leave the assignment based on destination mask
+			if($destination_mask){
+				#Treat as discard; ie add to lines.
+				push @lines, {
+					text	=> $assignment,
+					label	=> $label,
+					indent	=> $#branching
+				};
+				$label		= $next_label;
+			}
+			else{
+				#Push back on stack
+				push @stack, {
+					value		=> $assignment,
+					precedence	=> $precedence
+				};
+			}
 		}
-		$text = "[".arrayString(\@entries)."]";
+		#Function header arguments
+		elsif	($opcode eq 0x18) {	# OPCENTER			24
+			$fatal					= "Duplicate OPCENTER for $print_id" if $function_locals != 0;
+			$function_locals		= shift @payload;
+			$label					= $next_label;
+			$branching[0]{start}	= $label;
+		}
+		elsif	($opcode eq 0x4D) {	# OPCCHKARGC		77
+			$fatal					= "Duplicate OPCENTER for $print_id" if $function_arguments != 0;
+			$function_arguments		= shift @payload;
+			$label					= $next_label;
+			$branching[0]{start}	= $label;
+		}
+		elsif	($opcode eq 0x4F) {	# OPCFRAME			79
+			#Ignored
+			$label					= $next_label;
+			$branching[0]{start}	= $label;
+		}
+		#Push value
+		elsif	($opcode eq 0x01	# OPCPUSHNUM		01
+			||	 $opcode eq 0x02	# OPCPUSHOBJ		02
+			||	 $opcode eq 0x14	# OPCGETLCL			20
+			||	 $opcode eq 0x1F	# OPCPUSHSTR		31
+			||	 $opcode eq 0x20	# OPCPUSHLST		32
+			||	 $opcode eq 0x23	# OPCPUSHFN			35
+			||	 $opcode eq 0x43	# OPCPUSHPN			67
+			) {	# Push value to stack from payload
+			push @stack, {
+				value		=> shift @payload,
+				precedence	=> 14
+			};
+		}
+		elsif	($opcode eq 0x1C	# OPCPUSHSELF		28
+			||	 $opcode eq 0x21	# OPCPUSHNIL		33
+			||	 $opcode eq 0x22	# OPCPUSHTRUE		28
+			) {	# Push single word to stack
+			my $word;
+			$word	= 'self'	if $opcode eq 0x1C;
+			$word	= 'nil'		if $opcode eq 0x21;
+			$word	= 'true'	if $opcode eq 0x22;
+			push @stack, {
+				value		=> $word,
+				precedence	=> 14
+			};
+		}
+		#Unary operators
+		elsif	($opcode eq 0x03	# OPCNEG			03
+			||	 $opcode eq 0x04	# OPCNOT			04
+			||	 $opcode eq 0x57	# OPCBNOT			87
+			||	 $opcode eq 0x5A	# OPCNEW			90
+			||	 $opcode eq 0x5B	# OPCDELETE			91
+			) {	# Push result of unary operation on top of stack
+			my $precedence	= 11;	#Same for all operators
+			my $operator;	# Assign operator based on opcode
+			$operator		= '-'		if $opcode eq 0x03;
+			$operator		= 'not '	if $opcode eq 0x04;
+			$operator		= '~'		if $opcode eq 0x57;
+			$operator		= 'new '	if $opcode eq 0x5A;
+			$operator		= 'delete '	if $opcode eq 0x5B;
+			#Get arguments from stack
+			my $argument_ref	= pop @stack;
+			my $argument		= 'nil';
+			my $argument_prec	= 14;
+			$argument			= %{ $argument_ref }{value}			if defined $argument_ref;
+			$argument_prec		= %{ $argument_ref }{precedence}	if defined $argument_ref;
+			#Paranthesize as needed
+			$argument		= "($argument)" if ($argument_prec < $precedence);
+			#Perform operation and push back to stack
+			push @stack, {
+				value		=> "$operator$argument",
+				precedence	=> $precedence
+			};
+		}
+		#Binary operators
+		elsif	($opcode eq 0x05	# OPCADD			05
+			||	 $opcode eq 0x06	# OPCSUB			06
+			||	 $opcode eq 0x07	# OPCMUL			07
+			||	 $opcode eq 0x08	# OPCDIV			08
+			||	 $opcode eq 0x09	# OPCAND			09
+			||	 $opcode eq 0x0A	# OPCOR				10
+			||	 $opcode eq 0x0B	# OPCEQ				11
+			||	 $opcode eq 0x0C	# OPCNE				12
+			||	 $opcode eq 0x0D	# OPCGT				13
+			||	 $opcode eq 0x0E	# OPCGE				14
+			||	 $opcode eq 0x0F	# OPCLT				15
+			||	 $opcode eq 0x10	# OPCLE				16
+			||	 $opcode eq 0x53	# OPCMOD			83
+			||	 $opcode eq 0x54	# OPCBAND			84
+			||	 $opcode eq 0x55	# OPCBOR			85
+			||	 $opcode eq 0x56	# OPCXOR			86
+			||	 $opcode eq 0x58	# OPCSHL			88
+			||	 $opcode eq 0x59	# OPCSHR			89
+			) {	# Push result of binary operation on top two of stack
+			my $operator;	# Assign operator based on opcode
+			$operator	=	'+'		if $opcode eq 0x05;
+			$operator	=	'-'		if $opcode eq 0x06;
+			$operator	=	'*'		if $opcode eq 0x07;
+			$operator	=	'/'		if $opcode eq 0x08;
+			$operator	=	'and'	if $opcode eq 0x09;	# &&
+			$operator	=	'or'	if $opcode eq 0x0A;	# ||
+			$operator	=	'='		if $opcode eq 0x0B;	# eq
+			$operator	=	'<>'	if $opcode eq 0x0C;	# !=
+			$operator	=	'>'		if $opcode eq 0x0D;
+			$operator	=	'>='	if $opcode eq 0x0E;
+			$operator	=	'<'		if $opcode eq 0x0F;
+			$operator	=	'<='	if $opcode eq 0x10;
+			$operator	=	'%'		if $opcode eq 0x53;
+			$operator	=	'&'		if $opcode eq 0x54;
+			$operator	=	'|'		if $opcode eq 0x55;
+			$operator	=	'^'		if $opcode eq 0x56;
+			$operator	=	'<<'	if $opcode eq 0x58;
+			$operator	=	'>>'	if $opcode eq 0x59;
+			my $precedence;		# Precedence varies by operator
+			$precedence	= 10	if ( $opcode eq 0x07 || $opcode eq 0x08 || $opcode eq 0x53 );
+			$precedence	= 9		if ( $opcode eq 0x05 || $opcode eq 0x06 );
+			$precedence	= 8		if ( $opcode eq 0x58 || $opcode eq 0x59 );
+			$precedence	= 7		if (($opcode >= 0x0B && $opcode <= 0x10));
+			$precedence	= 6		if ( $opcode eq 0x54 );
+			$precedence	= 5		if ( $opcode eq 0x56 );
+			$precedence	= 4		if ( $opcode eq 0x55 );
+			$precedence	= 3		if ( $opcode eq 0x09 );
+			$precedence	= 2		if ( $opcode eq 0x0A );
+			#Get arguments from stack
+			my $argument2_ref	= pop @stack;
+			my $argument2		= 'nil';
+			my $argument2_prec	= 14;
+			$argument2			= %{ $argument2_ref }{value}		if defined $argument2_ref;
+			$argument2_prec		= %{ $argument2_ref }{precedence}	if defined $argument2_ref;
+			my $argument1_ref	= pop @stack;
+			my $argument1		= 'nil';
+			my $argument1_prec	= 14;
+			$argument1			= %{ $argument1_ref }{value}		if defined $argument1_ref;
+			$argument1_prec		= %{ $argument1_ref }{precedence}	if defined $argument1_ref;
+			#Paranthesize as needed
+			$argument2		= "($argument2)" if ($argument2_prec <= $precedence);
+			$argument1		= "($argument1)" if ($argument1_prec < $precedence); # Note difference in prec comparison
+			#Perform operation and push back to stack
+			push @stack, {
+				value		=> "$argument1 $operator $argument2",
+				precedence	=> $precedence
+			};
+		}
+		#Function call/reference
+		elsif	($opcode eq 0x11	# OPCCALL			17
+			||	 $opcode eq 0x12	# OPCGETP			18
+			||	 $opcode eq 0x13	# OPCGETPDATA		19	EXPERIMENTAL
+			||	 $opcode eq 0x15	# OPCPTRGETPDATA	21	EXPERIMENTAL
+			||	 $opcode eq 0x24	# OPCGETPSELFDATA	36	EXPERIMENTAL
+			||	 $opcode eq 0x26	# OPCPTRCALL		38
+			||	 $opcode eq 0x28	# OPCPTRGETP		40
+			||	 $opcode eq 0x3C	# OPCGETPSELF		60
+			||	 $opcode eq 0x3D	# OPCGETPSLFD		61	EXPERIMENTAL
+			||	 $opcode eq 0x3E	# OPCGETPOBJ		62
+			||	 $opcode eq 0x3F	# OPCGETPOBJD		63	EXPERIMENTAL
+			||	 $opcode eq 0x47	# OPCINHERIT		71
+			||	 $opcode eq 0x52	# OPCGETPPTRSELF	82	EXPERIMENTAL
+			) {	# Push result of function call
+			#Number of arguments is encoded in payload
+			my $argument_count	= shift @payload;
+			#Function is based on opcode
+			my $function;
+			my $precedence	= 13;
+			if ($opcode eq 0x11){						#Call to object in payload
+				$function		= shift @payload;
+			}
+			if ($opcode eq 0x12 || $opcode eq 0x13){	#Call to property in payload on object from stack
+				#EXPERIMENTAL: Assumed to be functionally identical
+				my $property	= shift @payload;
+				my $object		= 'nil';
+				my $object_prec	= 14;
+				my $object_ref	= pop @stack;
+				$object			= %{ $object_ref }{value}		if defined $object_ref;
+				$object_prec	= %{ $object_ref }{precedence}	if defined $object_ref;
+				$object			= "($object)" if $object_prec < $precedence;
+				$function		= "$object.$property";
+			}
+			if ($opcode eq 0x15 || $opcode eq 0x28){	#Call to property in stack on object in stack
+				#EXPERIMENTAL: Assumed to be functionally identical
+				my $property		= 'nil';
+				my $property_ref	= pop @stack;
+				$property			= %{ $property_ref }{value}	if defined $property_ref;
+				$property			= "($property)";	# Always need paranthesis 
+				my $object			= 'nil';
+				my $object_prec		= 14;
+				my $object_ref		= pop @stack;
+				$object				= %{ $object_ref }{value}		if defined $object_ref;
+				$object_prec		= %{ $object_ref }{precedence}	if defined $object_ref;
+				$object				= "($object)" if $object_prec < $precedence;
+				$function			= "$object.$property";
+			}
+			if ($opcode eq 0x26){						#Call to property on stack
+				my $property		= 'nil';
+				my $property_ref	= pop @stack;
+				$property			= %{ $property_ref }{value}	if defined $property_ref;
+				$function			= "$property";
+			}
+			if ($opcode eq 0x2E){						#Inherited call to property in payload on object in payload
+				my $property		= shift @payload;
+				my $object			= shift @payload;
+				my $function		= "inherited $object.$property";
+			}
+			if ($opcode eq 0x24 || $opcode eq 0x3C || $opcode eq 0x3D){	#Call to property on self
+			
+				#EXPERIMENTAL: Assumed to be functionally identical
+				my $property		= shift @payload;
+				$function			= "self.$property";
+			}
+			if ($opcode eq 0x3E || $opcode eq 0x3F){	#Call to property in payload on object in payload
+				my $property		= shift @payload;
+				my $object			= shift @payload;
+				$function			= "$object.$property";
+			}
+			if ($opcode eq 0x47){						#Inherited call to property in payload
+				my $property		= shift @payload;
+				$function		= "inherited $property";
+			}
+			if ($opcode eq 0x52){						#Call to property on stack
+				#EXPERIMENTAL: Based on naming
+				my $property		= 'nil';
+				my $property_ref	= pop @stack;
+				$property			= %{ $property_ref }{value}	if defined $property_ref;
+				$function			= "self.$property";
+			}
+			#Extract arguments from stack
+			my $arguments	= '(';
+			for (my $i=0 ; $i<$argument_count ; $i++) {
+				$arguments		.= ', '		if $i > 0;
+				my $object		= 'nil';
+				my $object_ref	= pop @stack;
+				$object			= %{ $object_ref }{value}	if defined $object_ref;
+				$arguments		.= $object;
+			}
+			$arguments		.= ')';
+			#Push function with arguments back to stack
+			push @stack, {
+				value		=> $function . $arguments,
+				precedence	=> $precedence
+			};
+		}
+		elsif	($opcode eq 0x1E){	# OPCBUILTIN		30
+			#Number of arguments is encoded in payload
+			my $argument_count	= shift @payload;
+			#Type of builtin is encoded in payload
+			my $type 			= shift @payload;
+			unless ($type eq $Translate_Builtin[0] && $argument_count eq 2){
+				#Say (type0) with 2 arguments is a special case
+				my $arguments	= '(';
+				for (my $i=0 ; $i<$argument_count ; $i++) {
+					$arguments		.= ', '		if $i > 0;
+					my $object		= 'nil';
+					my $object_ref	= pop @stack;
+					$object			= %{ $object_ref }{value}	if defined $object_ref;
+					$arguments		.= $object;
+				}
+				$arguments		.= ')';
+				#Push function with arguments back to stack
+				push @stack, {
+					value		=> $type . $arguments,
+					precedence	=> 13
+				};
+			}
+			else{
+				#Say (type0) with 2 arguments is inline text substitution: "<< expr >"
+				#The first arugment is the expression, second argument should be nil
+				my $expr_ref	= pop @stack;
+				my $expr		= 'nil';
+				$expr			= %{ $expr_ref }{value}		if defined $expr_ref;
+				my $discard_ref	= pop @stack;
+				my $discard		= 'nil';
+				$discard		= %{ $discard_ref }{value}	if defined $discard_ref;
+				#Build and combine 
+				if ( defined $lines[$#lines] && substr($lines[$#lines]{text}, - 2) eq '";') {
+					# If previous printed line was a say expression, we can combine them
+					$lines[$#lines]{text}	= substr($lines[$#lines]{text}, 0, -2)
+											. "<< $expr >>\";";
+					$lines[$#lines]{label}	= $label;
+				}
+				else {
+					push @lines, {
+						text	=> "\"<< $expr >>\";",
+						label	=> $label,
+						indent	=> $#branching
+					};
+				}
+				$label		= $next_label;
+				#Log warning if we discarded something (TODO: Improved header handling)
+				print $File_Log "BUILTIN SAY discarded $discard\n" unless $discard eq 'nil';
+			}
+		}
+		#Utility
+		elsif	($opcode eq 0x19) {	# OPCDISCARD		25
+			#Discard the top element of the stack, which implies we should print it.
+			my $text_ref	= pop @stack;
+			my $text		= '//Discard on empty stack';
+			$text			= %{ $text_ref }{value}	if defined $text_ref;
+			# Push output to lines, with the reference to the first instruction that resulted in this text
+			push @lines, {
+				text	=> $text.';',
+				label	=> $label,
+				indent	=> $#branching
+			};
+			$label		= $next_label;
+		}
+		elsif	($opcode eq 0x1D) {	# OPCSAY			29
+			my $text	= shift @payload;
+			#See if we can append to previous line
+			if ( defined $lines[$#lines] && substr($lines[$#lines]{text}, -4) eq '>>";') {
+				#>> indicated that the the current line ends in an inline text substitution, so we continue that line
+				$lines[$#lines]{text}	= substr($lines[$#lines]{text}, 0, -2)	# Trim the trailing ;"
+										. substr($text, 1)	# Trim the leading ", keeping the trailing "
+										. ";";
+				$lines[$#lines]{label}	= $pos;
+			}
+			#Push a new line
+			else {
+				push @lines, {
+					text	=> $text.';',
+					label	=> $label,
+					indent	=> $#branching
+				};
+			}
+			$label		= $next_label;
+		}
+		elsif	($opcode eq 0x29	# OPCPASS			41
+			||   $opcode eq 0x2A	# OPCEXIT			42
+			||	 $opcode eq 0x2B	# OPCABORT			43
+			||	 $opcode eq 0x2C	# OPCASKDO			44
+			||	 $opcode eq 0x2D	# OPCASKIO			45
+			) {	# single word operators
+			my $text;
+			$text			= 'pass'	if $opcode eq 0x29;
+			$text			= 'exit'	if $opcode eq 0x2A;
+			$text			= 'abort'	if $opcode eq 0x2B;
+			$text			= 'askdo'	if $opcode eq 0x2C;
+			$text			= 'askio'	if $opcode eq 0x2D;
+			my $property	= '';
+			$property		= shift @payload if $opcode eq 0x29 || $opcode eq 0x2D;
+			$property		= "($property)" unless $property eq '';
+			push @lines, {
+				text	=> "$text$property;",
+				label	=> $label,
+				indent	=> $#branching
+			};
+			$label		= $next_label;
+		}
+		elsif	($opcode eq 0x40) {	# OPCINDEX			64
+			#Index from stack applied to list from stack
+			my $index_ref	= pop @stack;
+			my $index		= 'nil';
+			$index			= %{ $index_ref }{value}		if defined $index_ref;
+			my $list_ref	= pop @stack;
+			my $list		= 'nil';
+			my $list_prec	= 14;
+			$list			= %{ $list_ref }{value}			if defined $list_ref;
+			$list_prec		= %{ $list_ref }{precedence}	if defined $list_ref;
+			#Paranthesize as needed
+			$list			= "($list)"	if ($list_prec < 13);
+			push @stack, {
+				value		=> $list .'['. $index . ']',
+				precedence	=> 13
+			};
+		}
+		elsif	($opcode eq 0x4A) {	# OPCCONS			74
+			#Construct a new list with the number embedded in payload elements from top of stack
+			#Number of elements is encoded in payload
+			my $element_count	= shift @payload;
+			#Extract elements from stack
+			my $elements	= '[';
+			for (my $i=0 ; $i<$element_count ; $i++) {
+				$elements		.= ', '		if $i > 0;
+				my $element		= 'nil';
+				my $element_ref	= pop @stack;
+				$element		= %{ $element_ref }{value}	if defined $element_ref;
+				$elements		.= $element;
+			}
+			$elements		.= ']';
+			push @stack, {
+				value		=> $elements,
+				precedence	=> 14
+			};
+		}
+		#Branching
+		elsif	($opcode eq 0x16	# OPCRETURN			22
+			||	 $opcode eq 0x17	# OPCRETVAL			23
+			) {	# Returns from the function;
+			my $text;
+			#We suppress valueless returns that terminate the main loop
+			$text	= 'return' unless $branching[$#branching]{type} eq 'MAIN';;
+			if ($opcode eq 0x17) {
+				my $value_ref	= pop @stack;
+				my $value		= 'nil';
+				$value			= %{ $value_ref }{value}	if defined $value_ref;
+				$text			= "return $value";
+			}
+			# Push output to lines, with the reference to the first instruction that resulted in this text
+			push @lines, {
+				text	=> $text,
+				label	=> $label,
+				indent	=> $#branching
+			};
+			$label		= $next_label;
+			my $type	= $branching[$#branching]{type};
+			print $File_Log "\t\t$type RETURN at $pos/$label\n"	if $Option_Verbose;
+			pop @branching	if $branching[$#branching]{type} eq 'MAIN';
+		}
+		elsif	($opcode eq 0x1A) {	# OPCJMP			26
+			#Unconditional jump, can be used in different branching structures:
+			#	WHILE	End		If destination is the start of WHILE branch
+			#			Break	If destination is the end of first WHILE branch
+			#	SWITCH	Break	If destination is the end of first SWITCH branch
+			#	ELSIF	ELSE	If destination is the end of current ELSIF branch
+			#	GOTO			Otherwise
+			#Get destination from payload
+			my $destination		= shift @payload;
+			#The relevant branching levels
+			my $branch_start	= $branching[$#branching]{start};
+			my $branch_end		= $branching[$#branching]{end};
+			my $branch_type		= $branching[$#branching]{type};
+			my $switch_end;		# End of the first switch statement, if relevant
+			my $switch_level;
+			for (my $i=$#branching ; $i>=0 ; $i--){
+				$switch_end			= $branching[$i]{end} if $branching[$i]{type} eq 'SWITCH';
+				$switch_level		= $i;
+			}
+			my $while_end;		#End of the first while statement, if relevant
+			my $while_level;
+			for (my $i=$#branching ; $i>=0 ; $i--){
+				$while_end			= $branching[$i]{end} if $branching[$i]{type} eq 'WHILE';
+				$while_level		= $i;
+			}
+			#Only keep the topmost of the two
+			undef $while_end		if defined $while_end && defined $switch_end && ($switch_end > $while_end);
+			undef $switch_end		if defined $while_end && defined $switch_end && ($while_end > $switch_end);
+			#Determine the corresponding branching construct
+			if	  ($branch_type eq 'WHILE' && $branch_start eq $destination && $branch_end eq $next_label){
+				#WHILE	Jump back to start of conditional jump
+				#End branch and close brackets
+				print $File_Log "\t\tWHILE-end at $pos/$label to $destination $branch_type($branch_start-$branch_end)\n"	if $Option_Verbose;
+				pop @branching;
+				push @lines, {
+					text	=> '}',
+					label	=> $label,
+					indent	=> $#branching
+				};
+				$label		= $next_label;
+			}
+			elsif (defined $while_end && $while_end eq $destination){
+				#WHILE	Jump to end of first while in stack
+				#Write a break
+				print $File_Log "\t\tWHILE-break at $pos/$label to $destination $branch_type($branch_start-$branch_end)\n"	if $Option_Verbose;
+				push @lines, {
+					text	=> 'break;',
+					label	=> $label,
+					indent	=> $#branching
+				};
+				$label		= $next_label;
+			}
+			elsif (defined $switch_end && $switch_end eq $destination){
+				#SWITCH	Jump to end of first while in stack
+				#Write a break
+				print $File_Log "\t\tSWITCH-break at $pos/$label to $destination $branch_type($branch_start-$branch_end)\n"	if $Option_Verbose;
+				push @lines, {
+					text	=> 'break;',
+					label	=> $label,
+					indent	=> $#branching
+				};
+				$label		= $next_label;
+			}
+			elsif ($branch_type eq 'ELSIF' && $branch_end eq $destination){
+				#ELSIF	The else part, with a possibility of an IF (0x1B) as next opcode
+				#Keep the branch, and write an else.
+				push @lines, {
+					text	=> '} else {',
+					label	=> $label,
+					indent	=> $#branching
+				};
+				$label		= $next_label;
+			}
+			else {
+				#GOTO
+				#Insert a label mark at the destination instruction
+				#Print a negated if condition and goto label
+				print $File_Log "\t\tGOTO at $pos/$label to $destination $branch_type($branch_start-$branch_end)\n"	if $Option_Verbose;
+				#TODO: Insert label mark
+				push @lines, {
+					text	=> 'goto label'.$destination.'{',
+					label	=> $label,
+					indent	=> $#branching
+				};
+				$label		= $next_label;
+			}
+		}
+		elsif	($opcode eq 0x1B) {	# OPCJF				27
+			#Conditional jump, can indicate different branching structures:
+			#	GOTO			If the jump is to outside the current structure
+			#	WHILE	Start	If the last instruction before destination is an unconditional (26) jump back to label
+			#	ELSIF	Append	If the destination or last instruction before destination is an unconditional (26) jump to the end of current ELSIF
+			#			New		If the last instruction before destination is an unconditional jump forward inside current branch
+			#	IF		New		Otherwise
+			#Get destination from payload and condition from stack
+			my $destination		= shift @payload;
+			my $condition		= 'nil';
+			my $condition_ref	= pop @stack;
+			$condition			= %{ $condition_ref }{value}	if defined $condition_ref;
+			#The relevant branching level
+			my $branch_start	= $branching[$#branching]{start};
+			my $branch_end		= $branching[$#branching]{end};
+			my $branch_type		= $branching[$#branching]{type};
+			#Find the last instruction in the branch, and see if it is a jump
+			my $last_id;			# ID in instruction array for last instruction of branch
+			my $last_opcode;		# Opcode of last intruction in branch
+			my $last_destination;	# Destination of last jump, if it's unconditional jump
+			for (my $branch_id=0 ; $branch_id<=$#instructions ; $branch_id++){
+				$last_id		= ($branch_id - 1) if $destination eq $instructions[$branch_id]{pos};
+			}
+			$last_opcode		= $instructions[$last_id]{opcode};
+			$last_destination	= $instructions[$last_id]{payload}[0] if $last_opcode eq 0x1A;
+			my $end_destination	= $destination;
+			$end_destination	= $last_destination if defined $last_destination;
+			#Determine the corresponding branching construct
+			if	  ($destination < $branch_start || $destination > $branch_end) {
+				#GOTO	Jump to outside current branch
+				#Insert a label mark at the destination instruction
+				#Print a negated if condition and goto label
+				print $File_Log "\t\tGOTO-unless at $pos/$label to $destination $branch_type($branch_start-$branch_end)\n"	if $Option_Verbose;
+				#TODO: Insert label mark
+				push @lines, {
+					text	=> 'if (not '.$condition.') goto label'.$destination.'{',
+					label	=> $label,
+					indent	=> $#branching
+				};
+				$label		= $next_label;
+			}
+			elsif (defined $last_destination && $last_destination eq $label) {
+				#WHILE	Jump back to start of conditional jump
+				#Print while condition and start a new branch
+				print $File_Log "\t\tWHILE-start at $pos/$label to $destination $branch_type($branch_start-$branch_end)\n"	if $Option_Verbose;
+				push @lines, {
+					text	=> 'while ('.$condition.') {',
+					label	=> $label,
+					indent	=> $#branching
+				};
+				push @branching, {
+					start	=> $label,
+					end		=> $destination,
+					type	=> 'WHILE'
+				};
+				$label		= $next_label;
+			}
+			elsif ($branch_type	eq 'ELSIF' && $branch_end eq $end_destination && substr($lines[$#lines]{text}, -8) eq '} else {') {
+				#ELSIF	Jump to an unconditional jump to the end of the branch
+				#Stay in the same branch, append condition to previously printed ELSE
+				print $File_Log "\t\tELSIF-append at $pos/$label to $destination $branch_type($branch_start-$branch_end)\n"	if $Option_Verbose;
+				$lines[$#lines]{text}	= substr($lines[$#lines]{text}, 0, length($lines[$#lines]{text}) -2)
+										. ' if (' . $condition . ') {';
+			}
+			elsif (defined $last_destination && $last_destination > $pos && $last_destination <= $branch_end ){
+				#ELSIF	Jump is to an unconditional forward jump inside same branch
+				#Write a conditional if, and mark branch as having an else component
+				print $File_Log "\t\tELSIF-new at $pos/$label to $destination $branch_type($branch_start-$branch_end)\n"	if $Option_Verbose;
+				push @lines, {
+					text	=> 'if ('.$condition.') {',
+					label	=> $label,
+					indent	=> $#branching
+				};
+				push @branching, {
+					start	=> $label,
+					end		=> $destination,
+					type	=> 'ELSIF'
+				};
+				$label		= $next_label;
+			}
+			else {
+				#IF		Simple conditional without else-clause
+				print $File_Log "\t\tIF-new at $pos/$label to $destination $branch_type($branch_start-$branch_end)\n"	if $Option_Verbose;
+				push @lines, {
+					text	=> 'if ('.$condition.') {',
+					label	=> $label,
+					indent	=> $#branching
+				};
+				push @branching, {
+					start	=> $label,
+					end		=> $destination,
+					type	=> 'IF'
+				};
+				$label		= $next_label;
+			}
+		}
+		elsif	($opcode eq 0x44	# OPCJST			68
+			||	 $opcode eq 0x45	# OPCJSF			69
+			) {	# Logical short-circuited evaluation
+			#We need to evaluate at the destination from payload
+			my $branch_start	= $branching[$#branching]{start};
+			my $branch_end		= $branching[$#branching]{end};
+			my $branch_type		= $branching[$#branching]{type};
+			my $destination		= shift @payload;
+			print $File_Log "\t\tEVALUATION-start at $pos/$label to $destination $branch_type($branch_start-$branch_end)\n"	if $Option_Verbose;
+			push @branching, {
+				start	=> $label,
+				end		=> $destination,
+				type	=> 'EVALUATION',
+				opcode	=> $opcode
+			};
+		}
+		elsif	($opcode eq 0x4B) {	# OPCSWITCH			75
+			#A table of switch cases is located at the position embedded in payload;
+			#This has been unpacked to a list of opcodes with target stored in the payload.
+			my $table_start		= $instructions[$instruction]{switch_start};
+			my $table_end		= $instructions[$instruction]{switch_end};
+			my @payload			= @{ $instructions[$instruction]{payload} };
+			#The statement to execute the switch on is stored at top of stack
+			my $statement_ref	= pop @stack;
+			my $statement		= 'nil';
+			$statement			= %{ $statement_ref }{value}	if defined $statement_ref;
+			#Build the switch cases based on payload
+			my @endpoints		= ();
+			my @switch_cases	= ();
+			for my $ref (@payload){
+				my %entry	= %{ $ref };
+				push @switch_cases, {
+					text	=> $entry{payload}[0],
+					start	=> $entry{target}
+				};
+				push @endpoints, $entry{target};
+			}
+			push @switch_cases, {
+				text	=> 'default',
+				start	=> $instructions[$instruction]{switch_default}
+			};
+			#Find the end points
+			push @endpoints, $instructions[$instruction]{switch_default};
+			push @endpoints, $table_start;
+			push @endpoints, $table_end;
+			@endpoints = sort {$a <=> $b} @endpoints;
+			for (my $case=0 ; $case<=$#switch_cases ; $case++){
+				for (my $end=0 ; $end<$#endpoints ; $end++){
+					if ($endpoints[$end] eq $switch_cases[$case]{start}){
+						$switch_cases[$case]{end}	= $endpoints[$end+1];
+						last;
+					}
+				}
+				die "No endpoint for switch case $case"  unless defined $switch_cases[$case]{end};
+			}
+			#Write the switch statement 
+			push @lines, {
+				text	=> "switch ($statement) {",
+				label	=> $label,
+				indent	=> $#branching
+			};
+			print $File_Log "\t\tSWITCH-start at $pos/$label to $endpoints[$#endpoints], ($table_start-$table_end)\n"if $Option_Verbose;
+			print $File_Log "\t\tCASE-start at $pos/$label, $switch_cases[0]{start}-$switch_cases[0]{end}\n"	if $Option_Verbose;
+			#Push the switch to branching, as well as the first case.
+			#Changes between cases is handled by the end of branch code.
+			push @branching, {
+				type	=> 'SWITCH',
+				start	=> $label,
+				end		=> $endpoints[$#endpoints],
+				cases	=> \@switch_cases,
+				case	=> 0
+			};
+			push @branching, {
+				type	=> 'CASE',
+				start	=> $switch_cases[0]{start},
+				end		=> $switch_cases[0]{end}
+			};
+			$label		= $next_label;
+		}
+		#Unhandled opcodes
+		else{
+			$fatal			= "Unknown OpCode $opcode for $print_id";
+		}
+#		print $File_Log Dumper @instructions;
+#		die;
+
+		#Check for end of branches
+		my $branch_end;
+		$branch_end		= $branching[$#branching]{end}	unless $#branching eq -1;
+		while(defined $branch_end && $branch_end eq $next_label){
+			my $branch_type	= $branching[$#branching]{type};
+			if    ($branch_type eq 'EVALUATION'){
+				#Defered evaluation of shor-circuit logic operator
+				#Operator and precedence are based on the opcode that started the branch
+				my $operator;
+				my $precedence;
+				$operator	= 'or'	if $branching[$#branching]{opcode} eq 0x44;	# ||
+				$precedence	= 2		if $branching[$#branching]{opcode} eq 0x44;
+				$operator	= 'and'	if $branching[$#branching]{opcode} eq 0x45;	# &&
+				$precedence	= 3		if $branching[$#branching]{opcode} eq 0x45;
+				#Get arguments
+				my $arg2_ref	= pop @stack;
+				my $arg2		= 'nil';
+				my $arg2_prec	= 14;
+				$arg2			= %{ $arg2_ref }{value}	if defined $arg2_ref;
+				$arg2_prec		= %{ $arg2_ref }{precedence}	if defined $arg2_ref;
+				my $arg1_ref	= pop @stack;
+				my $arg1		= 'nil';
+				my $arg1_prec	= 14;
+				$arg1			= %{ $arg1_ref }{value}	if defined $arg1_ref;
+				$arg1_prec		= %{ $arg1_ref }{precedence}	if defined $arg1_ref;
+				#Paranthesize as needed
+				$arg2			= "($arg2)" if ($arg2_prec <= $precedence);
+				$arg1			= "($arg1)" if ($arg1_prec < $precedence); # Note difference in prec comparison
+				#Store the operation as the condition
+				push @stack, {
+					value		=> "$arg1 $operator $arg2",
+					precedence	=> $precedence
+				};
+				pop @branching;
+			}
+			elsif ($branch_type eq 'CASE'){
+				#End of switch case, try to find and start the next
+				print $File_Log "\t\tCASE-end at $pos/$label\n"	if $Option_Verbose;
+				pop @branching;
+				my @cases		= @{ $branching[$#branching]{cases} };
+				my $next_case	= $branching[$#branching]{case} + 1;
+				my $next_pos;
+				#See if there are more cases
+				if ($next_case <= $#cases) {
+					my $start	= $cases[$next_case]{start};
+					my $end		= $cases[$next_case]{end};
+					print $File_Log "\t\tCASE-start at $pos/$label, $start-$end\n"	if $Option_Verbose;
+					$label	= $cases[$next_case]{start};
+					$branching[$#branching]{case}++;
+					#Write case line
+					push @lines, {
+						text	=> "case $cases[$next_case]{text}:",
+						label	=> $label,
+						indent	=> $#branching
+					};
+					#Push next case
+					push @branching, {
+						type	=> 'CASE',
+						start	=> $start,
+						end		=> $end
+					};
+					$next_pos	= $start;
+				}
+				else {
+					#No more cases, close out the switch
+					$next_pos	= $branching[$#branching]{end};
+					print $File_Log "\t\tSWITCH-end at $pos/$label -> $next_pos\n"	if $Option_Verbose;
+					pop @branching;
+					push @lines, {
+						text	=> "}",
+						label	=> $label,
+						indent	=> $#branching
+					};
+					$label	= $next_pos;
+				}
+				#Find the right instruction to continue at
+#				print "$print_id from $instruction ";
+				for (my $i=0 ; $i<=$#instructions ; $i++){
+					$instruction = $i-1 if $instructions[$i]{pos} eq $next_pos;
+				}
+#				print "to $instruction\n";
+			}
+			elsif ($branch_type eq 'IF' || $branch_type eq 'ELSIF'){
+				my $start	= $branching[$#branching]{start};
+				my $end		= $branching[$#branching]{end};
+				print $File_Log "\t\t$branch_type-end at $pos/$label ($start-$end)\n"	if $Option_Verbose;
+				pop @branching;
+				push @lines, {
+					text	=> "}",
+					label	=> $label,
+					indent	=> $#branching
+				};
+				$label	= $next_label;
+			}
+			elsif ($branch_type eq 'MAIN'){
+				#End of branch; ignore it as a return will catch it
+				my $start	= $branching[$#branching]{start};
+				my $end		= $branching[$#branching]{end};
+				print $File_Log "\t\t$branch_type-end at $pos/$label ($start-$end)\n"	if $Option_Verbose;
+				last;
+			}
+			else {
+				warn "Unhandled end of branch $branch_type at $pos";
+				pop @branching;
+			}
+			undef $branch_end;
+			$branch_end		= $branching[$#branching]{end}	unless $#branching eq -1;
+		}
+		#Check for fatal errors
+		if(defined $fatal){
+			print $File_Log "\t$print_id\n"	unless $Option_Verbose;
+			print $File_Log "\t\t$fatal\n";# . Dumper(@instructions);
+			warn $fatal;
+			last;
+		}
+		#Stop processing when the main loop is terminated
+		if ($#branching eq -1){
+			last;
+		}
 	}
-	return $text;
+	#Decide on arguments
+	my $arguments = '';
+	$arguments		= '('	if $function_arguments;
+	for (my $i=1 ; $i<=$function_arguments ; $i++){
+		$arguments	.= ', '	if $i > 1;
+		$arguments	.= nameLocal($id, -$i);	# Arguments have negative indexes in bytecode
+	}
+	$arguments		.= ') '	if $function_arguments;
+	#Print header
+	print $File_Sourcecode nameObject(-$id) . ": function"	if $mode_obj;
+	print $File_Sourcecode "\t".nameProperty($id)."\t= "	if $mode_prop;
+	print $File_Sourcecode $arguments."{\n";
+	#Print local definitions
+	my $locals;
+	$locals		= 'local '	if $function_locals;
+	for (my $i=1 ; $i<=$function_locals ; $i++){
+		$locals	.= ', '	if $i > 1;
+		$locals	.= nameLocal($id, $i);
+	}
+	print $File_Sourcecode "\t"				if $mode_prop;
+	print $File_Sourcecode "\t$locals;\n"	if defined $locals;
+    for my $i (0 .. $#lines) {
+		my $indent	= $lines[$i]{indent};
+		print $File_Sourcecode "\t"			if $mode_prop;
+		for my $t (0 .. $indent) { print $File_Sourcecode "\t"; }
+#		print $File_Sourcecode $lines[$i]{label} if defined $lines[$i]{label};
+		my $text	= $lines[$i]{text};
+		print $File_Sourcecode "$text\n" if defined $text;
+	}
+	print $File_Sourcecode "}\n";
 }
 ##Main Program Loop
 #Parse command-line arguments
@@ -1893,7 +2883,7 @@ die "$FileName_Path is not a valid path"	unless -d $FileName_Path;
 open($File_Log, "> :raw :bytes :unix", $FileName_Path . $FileName_Log) # Use :unix to flush the log as we write to it
 	|| die "$0: can't open $FileName_Path$FileName_Log for writing: $!";
 
-#Process the game archive
+print "Parsing $FileName_Bytecode\n";
 open($File_Bytecode, "< :raw :bytes", $FileName_Bytecode)
 	|| die("Couldn't open $FileName_Bytecode for reading.");
 preloadConstants();								# Populate arrays with TADS2 constants
@@ -1902,11 +2892,13 @@ parseFile();									# Parse the input file into the local data structures
 close($File_Bytecode);
 preloadMapping();								# Load mapping defaults
 parseMapping() if defined $FileName_Mapping;	# Read symbol file if called for
+print "Analyzing...\n";
 analyze();
 generateMapping() if $Option_Generate;			# Generate symbol file if called for
 
 open($File_Sourcecode, "> :raw :bytes", $FileName_Path . $FileName_Sourcecode)
 	|| die "$0: can't open $FileName_Path$FileName_Sourcecode for writing: $!";
+print "Writing results...\n";
 printSource();									# Print TADS source based on bytecode
 
 #Close file output
