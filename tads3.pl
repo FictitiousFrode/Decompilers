@@ -2,14 +2,20 @@ use strict;					# 'Safest' operation level
 use warnings;				# Give warnings
 use File::Basename;			# Interpreting resource filenames
 use File::Path 'make_path';	# Creating directories for resources
+use Data::Dumper;			# Dumping data structures
+use Carp;					# For stack tracing at errors
 
 #The T3 image format is well documented, available at:
 #	http://www.tads.org/t3doc/doc/techman/t3spec/format.htm
 
+my $Time_Start	= time();	# Epoch time for start of processing
+
 ##Version History
-my $Decompiler_Version		= 0.2;
+my $Decompiler_Version		= '0.4';
 #v0.1:	Initial structure for flow and storage
-#v0.2:	Parsing of data blocks
+#v0.2:	Parsing of basic data blocks
+#v0.3:	Object block parsing and initial analysis
+#v0.4:	Object printing
 
 ##Global variables##
 #File handling
@@ -56,8 +62,25 @@ my %Symbols					= ();
 my @Function_Set			= ();
 my @Constant_Definitions	= ();
 my @Constant_Pages			= ();
+my @Metaclass_Names			= ();
+my @Metaclass_Versions		= ();
+my @Objects					= ();
 
 ##File Handling
+sub debug($;$) {
+	my $block	= shift;
+	my $id		= shift;
+	my $size	= length $block;
+	print $File_Log "Debug dump for $id\n"	if defined $id;
+	for (my $i=0 ; $i<$size ; $i++) {
+		my $char	= substr($block, $i, 1);
+		my $byte	= ord($char);
+		$char		= '' if $byte > 128 || $byte < 32;
+		my $int		= '';
+		$int		= unpack('s', substr($block, $i, 2)) if $i < ($size-1);
+		print $File_Log "\t$i\t$byte\t$char\t$int\n"
+	}
+}
 
 ##Parsing
 sub parseHeader(){
@@ -106,19 +129,19 @@ sub parseFile(){
 		if	($block_type eq 'EOF ')		{ last }						# End of file marker; usually not reached due to zero size
 		#TODO: Verify that each file has one and only one ENTP block
 		if	($block_type eq 'ENTP')		{ parseBlockENTP($block) }		# ENTry Point
-		#OBJS
+		if	($block_type eq 'OBJS')		{ parseBlockOBJS($block) }		# OBJects Static
 		if	($block_type eq 'CPDF')		{ parseBlockCPDF($block) }		# Constant Pool DeFinition
 		if	($block_type eq 'CPPG')		{ parseBlockCPPG($block) }		# Constant Pool PaGe
 		if	($block_type eq 'MRES')		{ parseBlockMRES($block) }		# Multimedia RESources
-		#MREL
-		#MCLD
+		#MREL	Multimedia REsource Link
+		if	($block_type eq 'MCLD')		{ parseBlockMCLD($block) }		# MetaCLass Dependecy
 		if	($block_type eq 'FNSD')		{ parseBlockFNSD($block) }		# FuNction Set Dependency list
 		if	($block_type eq 'SYMD')		{ parseBlockSYMD($block) }		# SYMbolic name Definition
-		#SRCF
-		#GSYM
-		#MHLS
-		#MACR
-		#SINI
+		if	($block_type eq 'SRCF')		{ parseBlockSRCF($block) }		# SouRCe File descriptor - debug mode
+		#GSYM	Global SYMbol definition - debug mode
+		#MHLS	Method Header LiSt - debug mode
+		#MACR	MACRo - debug mode
+		if	($block_type eq 'SINI')		{ parseBlockSINI($block) }		# Static INItializer
 	}
 }
 #ENTryPoint blocks contains setup/startup data for the image
@@ -142,7 +165,41 @@ sub parseBlockENTP($){
 	$Version_Debug			= unpack('S', substr($block, 10, 2));
 	$Size_Debug_Frame		= unpack('S', substr($block, 10, 2))	if $Version_Image >= 2;
 }
-#TODO OBJS
+#Static Objects
+sub parseBlockOBJS($){
+	my $block	= shift;
+	my $length	= length($block);
+	#The block has a header containing:
+	#UINT16	Number of object entries
+	#UINT16	Metaclass ID
+	#UINT16	Flags
+	my $entries			= unpack('S', substr($block, 0, 2));
+	my $metaclass		= unpack('S', substr($block, 2, 2));
+	my $flags			= unpack('S', substr($block, 4, 2));
+	my $flag_large		= $flags & 0x01;
+	my $flag_transient	= $flags & 0x02;
+	print $File_Log "\t$entries objects of meta-class $Metaclass_Names[$metaclass]\n";
+	#TODO: Some classes can be safely ignored
+	#Read in each object
+	my $pos	= 6;
+	foreach my $entry (1..$entries){
+		my $id		= unpack('L', substr($block, $pos, 4));
+		my $size;	#Size depends on flags
+		$size		= unpack('S', substr($block, $pos+4, 2))	unless	$flag_large;
+		$size		= unpack('L', substr($block, $pos+4, 4))	if		$flag_large;
+		$pos		+= 6 unless	$flag_large;
+		$pos		+= 8 if		$flag_large;
+		my $data	= substr($block, $pos, $size);
+		$pos		+= $size;
+		#Store the object
+		$Objects[$id]	= {
+			id			=> $id,
+			metaclass	=> $metaclass,
+			data		=> $data
+		};
+		print $File_Log "\t$id ($size bytes)\n"		if $Option_Verbose;
+	}
+}
 #CPDF Defines the parameters for the constant pools
 sub parseBlockCPDF($){
 	my $block = shift;
@@ -195,6 +252,7 @@ sub parseBlockMRES($) {
 	# 2 Bytes: Number of entries
 	my $entries	= unpack('S', substr($block, 0, 2));
 	print $File_Log "\t$entries Entries\n";
+	print 	"Extracting $entries Resources...\n" if $entries;
 	#Read metadata and embedded data for each entry in one pass
 	my $pos		= 2;
 	for my $i (1 .. $entries){
@@ -221,7 +279,40 @@ sub parseBlockMRES($) {
 	}
 }
 #TODO	MREL
-#TODO	MCLD
+#MCLD contains the definitions of the meta classes, mapped to index numbers
+sub parseBlockMCLD($) {
+	my $block	= shift;
+	my $length	= length($block);
+	#The block has a small header indicating the number of list entries
+	# 2 Bytes: Number of entries
+	my $entries	= unpack('S', substr($block, 0, 2));
+	print $File_Log "\t$entries meta-classes\n";
+	my $pos		= 2;
+	for my $i (1 .. $entries){
+		#Each entry contains the following encoded meta-data
+		#UINT16	Offset to next entry
+		#UBYTE	Number of bytes in entry name
+		#STRING	Entry name
+		#UINT16	Number of property IDs
+		#UINT16	Size of each property record
+		#	List of property IDs, each of the given size
+		my $offset		= unpack('S', substr($block, $pos, 2));
+		my $size		= ord(substr($block, $pos + 2, 1));
+		my $metaclass	= substr($block, $pos+3, $size);
+		print $File_Log "\t$metaclass\n";
+		if ($metaclass =~ m/^([-_.,a-zA-Z0-9]*)\/(\d{6})/){
+			push @Metaclass_Names,		$1;
+			push @Metaclass_Versions,	$2;
+		}
+		else {
+			print $File_Log "\t\tUnhandled metaclass\n";
+			push @Metaclass_Names,		'';
+			push @Metaclass_Versions,	'000000';
+		}
+		#TODO Parse and store properties
+		$pos += $offset;
+	}
+}
 #FNSD provides the mapping from function set index numbers to function entrypoint vectors in the VM
 sub parseBlockFNSD($){
 	my $block = shift;
@@ -247,10 +338,11 @@ sub parseBlockSYMD($){
 	my $block = shift;
 	#SYMD blocks contains a UINT16 defining the number of entries, each of which has it's size coded into it.
 	#Symbols are stored sequentially with no dividers, so we need to read the entire block sequentially
-	my $entries	= unpack('s', substr($block, 0, 2));
+	my $entries	= unpack('S', substr($block, 0, 2));
 	my $entry	= 0;
 	my $pos		= 2;
 	my $size	= length ($block);
+	print $File_Log "\t$entries symbols\n";
 	while ($pos < $size){
 		my $symbol_value	= substr($block, $pos, 5);				# DATA_HOLDER object, unparsed
 		my $symbol_size		= ord(substr($block, $pos+5, 1));		# Length of symbol name
@@ -264,11 +356,95 @@ sub parseBlockSYMD($){
 	}
 	warn "Expected $entries, found $entry"	unless $entries eq $entry;
 }
-#TODO	SRCF
+#Debug information related to source file
+sub parseBlockSRCF($){
+	my $block = shift;
+	#Header
+	#UINT16	Number of entries
+	#UINT16	Size of each source line record
+	my $entries				= unpack('S', substr($block, 0, 2));
+	my $size_line_record	= unpack('S', substr($block, 2, 2));
+	print $File_Log "\tINFO: This blocktype has not been properly decoded\n";
+	print $File_Log "\t$entries definitions\n";
+	my $pos	= 6;
+	foreach my $entry (1..$entries){
+		my $size		 	= unpack('L', substr($block, $pos+0, 4));
+		my $master_index	= unpack('S', substr($block, $pos+4, 2));
+		my $filename_size	= unpack('S', substr($block, $pos+6, 2));
+		my $filename		= substr($block, $pos+8, $filename_size);
+		my $pos_rec			= $pos + 8 + $filename_size;
+		my $records			= unpack('L', substr($block, $pos_rec, 4));
+		$pos_rec 			+= 4;
+		print $File_Log "\t$filename with $records records\n";
+		foreach my $record (1..$records){
+			my $line_no		= unpack('L', substr($block, $pos_rec + 0, 4));
+			my $bytecode	= unpack('L', substr($block, $pos_rec + 4, 4));
+		}
+		#TODO: Store these
+		$pos	+= $size;
+	}
+}
 #TODO	GSYM
 #TODO	MHLS
 #TODO	MACR
-#TODO	SINI
+#Static Initializing 
+#TODO: Store the parsed data
+sub parseBlockSINI($){
+	my $block = shift;
+	#Header:
+	#UINT32	Size of header
+	#UINT32	Offset of static code pool that can be discarded
+	#UINT32	Number of initializers
+	my $header_size			= unpack('L', substr($block, 0, 4));
+	my $discard_offset		= unpack('L', substr($block, 4, 4));
+	my $entries				= unpack('L', substr($block, 12, 4));
+	my $pos					= $header_size;
+	foreach my $entry (1..$entries){
+		my $object		= unpack('L', substr($block, $pos+0, 4));
+		my $property	= unpack('L', substr($block, $pos+4, 2));
+	}
+}
+##Analyzing
+sub analyze(){
+	print "Analyzing Objects...\n";
+	analyzeObjects();
+}
+sub analyzeObjects(){
+	#tads-object
+	print $File_Log "Analyzing tads-object:\n";
+	for my $obj (0 .. $#Objects) {
+		#Not all Object ID's are actually used
+		next unless defined $Objects[$obj];
+		#Only analyze TADS objects
+		my $metaclass	= $Metaclass_Names[$Objects[$obj]{metaclass}];
+		next unless $metaclass eq 'tads-object';
+		#Read Object data:
+		my $data			= $Objects[$obj]{data};
+		my $superclasses	= unpack('S', substr($data, 0, 2));
+		my $properties		= unpack('S', substr($data, 2, 2));
+		my $flags			= unpack('S', substr($data, 4, 2));
+		my @superclass		= ();
+		my %property		= ();
+		my $pos				= 6;
+		foreach my $class (1..$superclasses) {
+			push @superclass, unpack('L', substr($data, $pos, 4));
+			$pos += 4;
+		}
+		foreach my $class (1..$properties) {
+			my $prop			= unpack('S', substr($data, $pos, 2));
+			my $dataholder		= substr($data, $pos+2, 5);
+			$property{$prop}	= $dataholder;
+			$pos += 7;
+		}
+		#Store data
+		$Objects[$obj]{superclass}	= \@superclass;
+		$Objects[$obj]{property}	= \%property;
+		$Objects[$obj]{isclass}		= $flags & 0x01;
+		print $File_Log "\tObj$obj: $superclasses superclasses, $properties properties\n";# if $Option_Verbose;
+	}
+}
+
+
 
 ##Main Program Loop
 #Parse command-line arguments
@@ -323,20 +499,25 @@ open($File_Log, "> :raw :bytes :unix", $FileName_Path . $FileName_Log) # Use :un
 	|| die "$0: can't open " . $FileName_Path . $FileName_Log . " for writing: $!";
 
 #Process the game archive
+print "Parsing $FileName_Bytecode\n";
 open($File_ByteCode, "< :raw :bytes", $FileName_Bytecode)
 	|| die("Couldn't open $FileName_Bytecode for reading.");
+#TODO	preloadConstants();								# Populate arrays with TADS3 constants
 parseHeader();									# Read header and determine version/type of file
 parseFile();									# Parse the input file into the local data structures
 close($File_ByteCode);
 #TODO	preloadMapping();								# Load mapping defaults
 #TODO	parseMapping() if defined $FileName_Mapping;	# Read symbol file if called for
-#TODO	analyze();
+print "Analyzing...\n";
+analyze();
 #TODO	generateMapping() if $Option_Generate;			# Generate symbol file if called for
 
 #TODO: Generate source code
 open($File_SourceCode, "> :raw :bytes", $FileName_Path . $FileName_SourceCode)
 	|| die "$0: can't open " . $FileName_Path . $FileName_SourceCode . "for writing: $!";
+print "Writing results...\n";
 
 #Close file output
 close($File_SourceCode);
 close($File_Log);
+print "Decompiling completed in ".(time - $Time_Start)." seconds.\n";
