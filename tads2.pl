@@ -5,8 +5,10 @@ use File::Path 'make_path';	# Creating directories for resources
 use Data::Dumper;			# Dumping data structures
 use Carp;					# For stack tracing at errors
 
+my $Time_Start	= time();	# Epoch time for start of processing
+
 ##Version History
-my $Decompiler_Version		= 0.8;
+my $Decompiler_Version		= '0.9.2';
 #v0.1:	Initial structure for flow and storage
 #v0.2:	Parsing of data blocks (Headers + XSI/OBJ/RES)
 #v0.3:	Generation and parsing of symbol file
@@ -15,6 +17,10 @@ my $Decompiler_Version		= 0.8;
 #v0.6:	Basic source printing, vocabulary analysis
 #v0.7:	Code analysis: instruction set parsing
 #v0.8:	Code analysis: instruction printing
+#v0.9:	Minor tweaks
+#	 .0	Time analysis
+#	 .1	Improved handling of 'junk data'
+#	 .2	Labeling
 
 ##Global variables##
 #File handling
@@ -321,6 +327,7 @@ sub nameProperty($) {
 sub nameLocal($$) {
 	my $id		= shift;	# Negative for object functions, positive for properties
 	my $value	= shift;	# Negative for arguments, positive for locals
+	return 'UnknownArg' unless defined $value;
 	# Arg1 is stored at index 0, etc
 	if ($value > 0) {
 		my $local	= $value;
@@ -815,7 +822,6 @@ sub parseBlockOBJ($) {
 		}
 		else{
 			print $File_Log "\tObj$id: Unhandled type: $type\n";
-			#TODO: Add translation of type
 		}
 	}
 	print $File_Log "\tFound $found objects in total\n";
@@ -1011,9 +1017,9 @@ sub parseBlockRES($) {
 	my $entries	= unpack('L', substr($block, 0, 4));
 	my $offset	= unpack('L', substr($block, 4, 4));
 	print $File_Log "\t$entries Entries\n";
+	print 	"Extracting $entries Resources...\n" if $entries;
 	#Read metadata and embedded data for each entry in one pass
 	my $pos		= 8;
-	print 	"Extracting $entries Resources...\n" if $entries;
 	for my $i (1 .. $entries) {
 		#Metadata
 		my $data_pos	= unpack('L', substr($block, $pos, 4));
@@ -1418,11 +1424,10 @@ sub analyzeOpcode($$$) {
 		my @templates	= ();
 		@templates		= @{ $Constant_Opcode_Payload[$opcode] } if defined $Constant_Opcode_Payload[$opcode];
 		foreach my $template (@templates) {
-			if ($template eq 'UNKNOWN') {
-				#payload is unknown for this opcode
-				#TODO: Better error handling
-				debug($codeblock, $id);
-				die "Unable to decode embedded payload for opcode $opcode";
+			if	  ($template eq 'UNKNOWN') {
+				#Payload is unknown for this opcode
+				#We delay raising an error, as this might come from 'junk code' that is never called
+				push @payload, 'UNKNOWN';
 			}
 			elsif ($template eq 'INT32') {
 				#Number embedded as INT32
@@ -1479,16 +1484,18 @@ sub analyzeOpcode($$$) {
 				push @payload, $value;
 			}
 			elsif ($template eq 'OFFSET') {
-				#Address in code block, stored as relative locatin in INT16
-				my $value	= $pos + $size + unpack('s', substr($codeblock, $pos + $size, 2));
-				$size+=2;
+				#Address in code block, stored as relative location in INT16
+				my $value	= unpack('s', substr($codeblock, $pos + $size, 2));
+				$value		+= $pos + $size if defined $value;
+				$size		+= 2;
 				push @payload, $value;
 			}
 			elsif ($template eq 'STRING') {
 				#String stored as a UINT16 denoting the total length
 				my $length	= unpack('S', substr($codeblock, $pos + $size, 2));
-				my $value	= decodeProperty(9, substr($codeblock, $pos + $size, $length));
-				$size+=$length;
+				my $value	= '';
+				$value		= decodeProperty(9, substr($codeblock, $pos + $size, $length)) if defined $length;
+				$size+=$length if defined $length;
 				push @payload, $value;
 			}
 			elsif ($template eq 'LIST') {
@@ -1533,7 +1540,6 @@ sub analyzeOpcode($$$) {
 			}
 			elsif ($template eq 'UNKNOWN2') {
 				#Payload of known size but unknown function; skipped
-				#TODO: Log a warning
 				my $value	= unpack('s', substr($codeblock, $pos + $size, 2));
 				$size+=2;
 			}
@@ -1637,8 +1643,10 @@ sub arrayString($;$) {
 	my @list		= @{ $listref };
 	my $text = '';
 	for my $i (0 .. $#list) {
-		$text	.= ', ' if $i > 0;
-		$text	.= $delimiter . $list[$i] . $delimiter;
+		my $item	= 'ERROR-NIL';
+		$item		= $list[$i] if defined $list[$i];
+		$text		.= ', ' if $i > 0;
+		$text		.= "$delimiter$item$delimiter";
 	}
 	return $text;
 }
@@ -1648,7 +1656,7 @@ sub decodeProperty($$) {
 	my $type	= shift;
 	my $data	= shift;
 	croak "Can't decode without type"	unless defined $type;
-	croak "Can't decode empty data"	unless defined $data;
+	croak "Can't decode empty data"		unless defined $data;
 	#Default value is the name of the property; This covers:
 	# 4	BASEPTR
 	# 5	NIL		type is the same as value
@@ -1796,7 +1804,7 @@ sub printObjectSource($) {
 			elsif	($Constant_Property_Type[$prop_type] eq 'synonym') {
 				my $property_target	= unpack('S', $prop_data);
 				my $action_type		= substr(nameProperty($prop), 0, 2);
-				if (defined $Property_Actions{$prop}){
+				if (defined $Property_Actions{$prop} && defined $Property_Actions{$property_target}){
 					my $action_target	= nameAction($Property_Actions{$property_target});
 					my $action_this		= nameAction($Property_Actions{$prop});				
 					undef $action_type	unless $action_type eq 'do' || $action_type eq 'io';
@@ -1852,6 +1860,7 @@ sub printInstructions($){
 	my @stack			= ();	# The current stack
 	my @lines			= ();	# The lines so far 
 	my @branching		= ();	# Keeping track of code branching
+	my @labels			= ();	# Which positions need a label statement
 	my $label			= 0;	# The code position where text was last pushed
 	# Negative ID for object functions, positive for properties
 	my $mode_obj;
@@ -2273,19 +2282,20 @@ sub printInstructions($){
 				my $discard		= 'nil';
 				$discard		= %{ $discard_ref }{value}	if defined $discard_ref;
 				#Build and combine 
-				if ( defined $lines[$#lines] && substr($lines[$#lines]{text}, - 2) eq '";') {
-					# If previous printed line was a say expression, we can combine them
-					$lines[$#lines]{text}	= substr($lines[$#lines]{text}, 0, -2)
-											. "<< $expr >>\";";
-					$lines[$#lines]{label}	= $label;
-				}
-				else {
-					push @lines, {
-						text	=> "\"<< $expr >>\";",
-						label	=> $label,
-						indent	=> $#branching
-					};
-				}
+#DEPRECATED: This was good for aesthetics, but ruined GOTOs to the middle of the text.
+#				if ( defined $lines[$#lines] && substr($lines[$#lines]{text}, - 2) eq '";') {
+#					# If previous printed line was a say expression, we can combine them
+#					$lines[$#lines]{text}	= substr($lines[$#lines]{text}, 0, -2)
+#											. "<< $expr >>\";";
+#					$lines[$#lines]{label}	= $label;
+#				}
+#				else {
+				push @lines, {
+					text	=> "\"<< $expr >>\";",
+					label	=> $label,
+					indent	=> $#branching
+				};
+#				}
 				$label		= $next_label;
 				#Log warning if we discarded something (TODO: Improved header handling)
 				print $File_Log "BUILTIN SAY discarded $discard\n" unless $discard eq 'nil';
@@ -2308,21 +2318,22 @@ sub printInstructions($){
 		elsif	($opcode eq 0x1D) {	# OPCSAY			29
 			my $text	= shift @payload;
 			#See if we can append to previous line
-			if ( defined $lines[$#lines] && substr($lines[$#lines]{text}, -4) eq '>>";') {
-				#>> indicated that the the current line ends in an inline text substitution, so we continue that line
-				$lines[$#lines]{text}	= substr($lines[$#lines]{text}, 0, -2)	# Trim the trailing ;"
-										. substr($text, 1)	# Trim the leading ", keeping the trailing "
-										. ";";
-				$lines[$#lines]{label}	= $pos;
-			}
+#DEPRECATED: This was good for aesthetics, but ruined GOTOs to the middle of the text.
+#			if ( defined $lines[$#lines] && substr($lines[$#lines]{text}, -4) eq '>>";') {
+#				#>> indicated that the the current line ends in an inline text substitution, so we continue that line
+#				$lines[$#lines]{text}	= substr($lines[$#lines]{text}, 0, -2)	# Trim the trailing ;"
+#										. substr($text, 1)	# Trim the leading ", keeping the trailing "
+#										. ";";
+#				$lines[$#lines]{label}	= $pos;
+#			}
 			#Push a new line
-			else {
-				push @lines, {
-					text	=> $text.';',
-					label	=> $label,
-					indent	=> $#branching
-				};
-			}
+#			else {
+			push @lines, {
+				text	=> $text.';',
+				label	=> $label,
+				indent	=> $#branching
+			};
+#			}
 			$label		= $next_label;
 		}
 		elsif	($opcode eq 0x29	# OPCPASS			41
@@ -2485,9 +2496,9 @@ sub printInstructions($){
 				#Insert a label mark at the destination instruction
 				#Print a negated if condition and goto label
 				print $File_Log "\t\tGOTO at $pos/$label to $destination $branch_type($branch_start-$branch_end)\n"	if $Option_Verbose;
-				#TODO: Insert label mark
+				push @labels, $destination;
 				push @lines, {
-					text	=> 'goto label'.$destination.'{',
+					text	=> 'goto label'.$destination.';',
 					label	=> $label,
 					indent	=> $#branching
 				};
@@ -2527,9 +2538,9 @@ sub printInstructions($){
 				#Insert a label mark at the destination instruction
 				#Print a negated if condition and goto label
 				print $File_Log "\t\tGOTO-unless at $pos/$label to $destination $branch_type($branch_start-$branch_end)\n"	if $Option_Verbose;
-				#TODO: Insert label mark
+				push @labels, $destination;
 				push @lines, {
-					text	=> 'if (not '.$condition.') goto label'.$destination.'{',
+					text	=> 'if (not '.$condition.') goto label'.$destination.';',
 					label	=> $label,
 					indent	=> $#branching
 				};
@@ -2673,9 +2684,6 @@ sub printInstructions($){
 		else{
 			$fatal			= "Unknown OpCode $opcode for $print_id";
 		}
-#		print $File_Log Dumper @instructions;
-#		die;
-
 		#Check for end of branches
 		my $branch_end;
 		$branch_end		= $branching[$#branching]{end}	unless $#branching eq -1;
@@ -2792,8 +2800,44 @@ sub printInstructions($){
 			last;
 		}
 		#Stop processing when the main loop is terminated
-		if ($#branching eq -1){
-			last;
+		last if $#branching eq -1;
+	}
+	#Calculate labels
+	@labels		= sort {$a <=> $b} @labels;
+	#Trim duplicates
+	my $distinct = 1;
+	while ($distinct < $#labels) {
+		if ($labels[$distinct-1] eq $labels[$distinct]){
+			splice @labels, $distinct, 1;
+		}
+		else {
+			$distinct++;
+		}
+	}
+	#Find the line corresponding to the position
+	for my $l (0 .. $#labels){
+		my $found;
+		for my $i (0 .. $#lines) {
+			last if $lines[$i]{label} > $labels[$l]; #We're past it..
+			next if $lines[$i]{label} < $labels[$l]; #This is not the one
+			$lines[$i]{print_label}	= 1;
+			$found = 1;
+		}
+		#Label could be at the end..
+		if ($lines[$#lines]{label} < $labels[$l]){
+			push @lines, {
+				text	=> "label$labels[$l];",
+				label	=> $labels[$l],
+				indent	=> 0
+			};
+			$found = 1;
+		}
+		unless (defined $found) {
+#			print $File_Log Dumper @labels;
+#			print $File_Log Dumper @lines;
+#			print $File_Log Dumper @instructions;
+			print $File_Log "\t$print_id\n"	unless $Option_Verbose;
+			print $File_Log "\t\tUnable to insert label$labels[$l]\n";
 		}
 	}
 	#Decide on arguments
@@ -2815,16 +2859,21 @@ sub printInstructions($){
 		$locals	.= ', '	if $i > 1;
 		$locals	.= nameLocal($id, $i);
 	}
-	print $File_Sourcecode "\t"				if $mode_prop;
+	print $File_Sourcecode "\t"				if defined $locals && $mode_prop;
 	print $File_Sourcecode "\t$locals;\n"	if defined $locals;
     for my $i (0 .. $#lines) {
-		my $indent	= $lines[$i]{indent};
-		print $File_Sourcecode "\t"			if $mode_prop;
-		for my $t (0 .. $indent) { print $File_Sourcecode "\t"; }
-#		print $File_Sourcecode $lines[$i]{label} if defined $lines[$i]{label};
+		#Print label if needed
+		print $File_Sourcecode "label$lines[$i]{label}:\n" 	if defined $lines[$i]{print_label};
+		#Find the text
 		my $text	= $lines[$i]{text};
-		print $File_Sourcecode "$text\n" if defined $text;
+		next unless defined $text;	# Returns sometimes don't leave a line
+		#Indent properly before writing text
+		my $indent	= $lines[$i]{indent};
+		for my $t (0 .. $indent) { print $File_Sourcecode "\t"; }
+		print $File_Sourcecode "\t"			if $mode_prop;
+		print $File_Sourcecode "$text\n";
 	}
+	print $File_Sourcecode "\t"			if $mode_prop;
 	print $File_Sourcecode "}\n";
 }
 ##Main Program Loop
@@ -2904,3 +2953,4 @@ printSource();									# Print TADS source based on bytecode
 #Close file output
 close($File_Sourcecode);
 close($File_Log);
+print "Decompiling completed in ".(time - $Time_Start)." seconds.\n";
