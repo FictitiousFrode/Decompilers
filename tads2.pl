@@ -8,7 +8,7 @@ use Carp;					# For stack tracing at errors
 my $Time_Start	= time();	# Epoch time for start of processing
 
 ##Version History
-my $Decompiler_Version		= '0.9.2';
+my $Decompiler_Version		= '0.10';
 #v0.1:	Initial structure for flow and storage
 #v0.2:	Parsing of data blocks (Headers + XSI/OBJ/RES)
 #v0.3:	Generation and parsing of symbol file
@@ -18,9 +18,7 @@ my $Decompiler_Version		= '0.9.2';
 #v0.7:	Code analysis: instruction set parsing
 #v0.8:	Code analysis: instruction printing
 #v0.9:	Minor tweaks
-#	 .0	Time analysis
-#	 .1	Improved handling of 'junk data'
-#	 .2	Labeling
+#v0.10:	Various bugfixes
 
 ##Global variables##
 #File handling
@@ -1366,7 +1364,7 @@ sub analyzeCodeblock($$) {
 			return \@instructions;
 		}
 		print $File_Log	"\t\t$pos\t$opcode - $Constant_Opcode[$opcode] ($size bytes):\t$payload\n"	if $Option_Verbose && $opcode < 192;
-		print $File_Log	"\t\t$pos\t$opcode - Assignment ($size bytes)\n"	if $Option_Verbose && $opcode >= 192;
+		print $File_Log	"\t\t$pos\t$opcode - Assignment ($size bytes):\t$payload\n"					if $Option_Verbose && $opcode >= 192;
 		$pos += $size;
 		#If we got a switch table, remember to skip over it later on.
 		if ($opcode eq 0x4B) {
@@ -1881,10 +1879,13 @@ sub printInstructions($){
 	};
 	for (my $instruction=0 ; $instruction<$#instructions ; $instruction++){
 		#Read instruction details
-		my $opcode		= $instructions[$instruction]{opcode};
-		my $pos			= $instructions[$instruction]{pos};
-		my $next_label	= $instructions[$instruction]{size} + $pos;
-		my @payload		= @{ $instructions[$instruction]{payload} };
+		my $opcode			= $instructions[$instruction]{opcode};
+		my $pos				= $instructions[$instruction]{pos};
+		my $next_label		= $instructions[$instruction]{size} + $pos;
+		my @payload			= @{ $instructions[$instruction]{payload} };
+		# Should label be updted to next label?
+		my $update_label	= 0;
+		my $label_updated	= 0;
 		#Flag for fatal error in parsing
 		my $fatal;
 		#Property Assignments
@@ -2001,7 +2002,7 @@ sub printInstructions($){
 					label	=> $label,
 					indent	=> $#branching
 				};
-				$label		= $next_label;
+				$update_label++;
 			}
 			else{
 				#Push back on stack
@@ -2015,19 +2016,19 @@ sub printInstructions($){
 		elsif	($opcode eq 0x18) {	# OPCENTER			24
 			$fatal					= "Duplicate OPCENTER for $print_id" if $function_locals != 0;
 			$function_locals		= shift @payload;
-			$label					= $next_label;
-			$branching[0]{start}	= $label;
+			$branching[0]{start}	= $next_label;
+			$update_label++;
 		}
 		elsif	($opcode eq 0x4D) {	# OPCCHKARGC		77
 			$fatal					= "Duplicate OPCENTER for $print_id" if $function_arguments != 0;
 			$function_arguments		= shift @payload;
-			$label					= $next_label;
-			$branching[0]{start}	= $label;
+			$branching[0]{start}	= $next_label;
+			$update_label++;
 		}
 		elsif	($opcode eq 0x4F) {	# OPCFRAME			79
 			#Ignored
-			$label					= $next_label;
-			$branching[0]{start}	= $label;
+			$branching[0]{start}	= $next_label;
+			$update_label++;
 		}
 		#Push value
 		elsif	($opcode eq 0x01	# OPCPUSHNUM		01
@@ -2056,7 +2057,7 @@ sub printInstructions($){
 				precedence	=> 14
 			};
 		}
-		#Unary operators
+		#Operators
 		elsif	($opcode eq 0x03	# OPCNEG			03
 			||	 $opcode eq 0x04	# OPCNOT			04
 			||	 $opcode eq 0x57	# OPCBNOT			87
@@ -2084,7 +2085,6 @@ sub printInstructions($){
 				precedence	=> $precedence
 			};
 		}
-		#Binary operators
 		elsif	($opcode eq 0x05	# OPCADD			05
 			||	 $opcode eq 0x06	# OPCSUB			06
 			||	 $opcode eq 0x07	# OPCMUL			07
@@ -2153,6 +2153,23 @@ sub printInstructions($){
 				precedence	=> $precedence
 			};
 		}
+		elsif	($opcode eq 0x40) {	# OPCINDEX			64
+			#Index from stack applied to list from stack
+			my $index_ref	= pop @stack;
+			my $index		= 'nil';
+			$index			= %{ $index_ref }{value}		if defined $index_ref;
+			my $list_ref	= pop @stack;
+			my $list		= 'nil';
+			my $list_prec	= 14;
+			$list			= %{ $list_ref }{value}			if defined $list_ref;
+			$list_prec		= %{ $list_ref }{precedence}	if defined $list_ref;
+			#Paranthesize as needed
+			$list			= "($list)"	if ($list_prec < 13);
+			push @stack, {
+				value		=> $list .'['. $index . ']',
+				precedence	=> 13
+			};
+		}
 		#Function call/reference
 		elsif	($opcode eq 0x11	# OPCCALL			17
 			||	 $opcode eq 0x12	# OPCGETP			18
@@ -2213,7 +2230,6 @@ sub printInstructions($){
 				my $function		= "inherited $object.$property";
 			}
 			if ($opcode eq 0x24 || $opcode eq 0x3C || $opcode eq 0x3D){	#Call to property on self
-			
 				#EXPERIMENTAL: Assumed to be functionally identical
 				my $property		= shift @payload;
 				$function			= "self.$property";
@@ -2296,7 +2312,7 @@ sub printInstructions($){
 					indent	=> $#branching
 				};
 #				}
-				$label		= $next_label;
+				$update_label++;
 				#Log warning if we discarded something (TODO: Improved header handling)
 				print $File_Log "BUILTIN SAY discarded $discard\n" unless $discard eq 'nil';
 			}
@@ -2313,7 +2329,7 @@ sub printInstructions($){
 				label	=> $label,
 				indent	=> $#branching
 			};
-			$label		= $next_label;
+			$update_label++;
 		}
 		elsif	($opcode eq 0x1D) {	# OPCSAY			29
 			my $text	= shift @payload;
@@ -2334,46 +2350,7 @@ sub printInstructions($){
 				indent	=> $#branching
 			};
 #			}
-			$label		= $next_label;
-		}
-		elsif	($opcode eq 0x29	# OPCPASS			41
-			||   $opcode eq 0x2A	# OPCEXIT			42
-			||	 $opcode eq 0x2B	# OPCABORT			43
-			||	 $opcode eq 0x2C	# OPCASKDO			44
-			||	 $opcode eq 0x2D	# OPCASKIO			45
-			) {	# single word operators
-			my $text;
-			$text			= 'pass'	if $opcode eq 0x29;
-			$text			= 'exit'	if $opcode eq 0x2A;
-			$text			= 'abort'	if $opcode eq 0x2B;
-			$text			= 'askdo'	if $opcode eq 0x2C;
-			$text			= 'askio'	if $opcode eq 0x2D;
-			my $property	= '';
-			$property		= shift @payload if $opcode eq 0x29 || $opcode eq 0x2D;
-			$property		= "($property)" unless $property eq '';
-			push @lines, {
-				text	=> "$text$property;",
-				label	=> $label,
-				indent	=> $#branching
-			};
-			$label		= $next_label;
-		}
-		elsif	($opcode eq 0x40) {	# OPCINDEX			64
-			#Index from stack applied to list from stack
-			my $index_ref	= pop @stack;
-			my $index		= 'nil';
-			$index			= %{ $index_ref }{value}		if defined $index_ref;
-			my $list_ref	= pop @stack;
-			my $list		= 'nil';
-			my $list_prec	= 14;
-			$list			= %{ $list_ref }{value}			if defined $list_ref;
-			$list_prec		= %{ $list_ref }{precedence}	if defined $list_ref;
-			#Paranthesize as needed
-			$list			= "($list)"	if ($list_prec < 13);
-			push @stack, {
-				value		=> $list .'['. $index . ']',
-				precedence	=> 13
-			};
+			$update_label++;
 		}
 		elsif	($opcode eq 0x4A) {	# OPCCONS			74
 			#Construct a new list with the number embedded in payload elements from top of stack
@@ -2394,18 +2371,40 @@ sub printInstructions($){
 				precedence	=> 14
 			};
 		}
+		elsif	($opcode eq 0x29	# OPCPASS			41
+			||   $opcode eq 0x2A	# OPCEXIT			42
+			||	 $opcode eq 0x2B	# OPCABORT			43
+			||	 $opcode eq 0x2C	# OPCASKDO			44
+			||	 $opcode eq 0x2D	# OPCASKIO			45
+			) {	# single word output
+			my $text;
+			$text			= 'pass'	if $opcode eq 0x29;
+			$text			= 'exit'	if $opcode eq 0x2A;
+			$text			= 'abort'	if $opcode eq 0x2B;
+			$text			= 'askdo'	if $opcode eq 0x2C;
+			$text			= 'askio'	if $opcode eq 0x2D;
+			my $property	= '';
+			$property		= shift @payload if $opcode eq 0x29 || $opcode eq 0x2D;
+			$property		= "($property)" unless $property eq '';
+			push @lines, {
+				text	=> "$text$property;",
+				label	=> $label,
+				indent	=> $#branching
+			};
+			$update_label++;
+		}
 		#Branching
 		elsif	($opcode eq 0x16	# OPCRETURN			22
 			||	 $opcode eq 0x17	# OPCRETVAL			23
 			) {	# Returns from the function;
 			my $text;
 			#We suppress valueless returns that terminate the main loop
-			$text	= 'return' unless $branching[$#branching]{type} eq 'MAIN';;
+			$text	= 'return;' unless $branching[$#branching]{type} eq 'MAIN';;
 			if ($opcode eq 0x17) {
 				my $value_ref	= pop @stack;
 				my $value		= 'nil';
 				$value			= %{ $value_ref }{value}	if defined $value_ref;
-				$text			= "return $value";
+				$text			= "return $value;";
 			}
 			# Push output to lines, with the reference to the first instruction that resulted in this text
 			push @lines, {
@@ -2413,10 +2412,10 @@ sub printInstructions($){
 				label	=> $label,
 				indent	=> $#branching
 			};
-			$label		= $next_label;
 			my $type	= $branching[$#branching]{type};
 			print $File_Log "\t\t$type RETURN at $pos/$label\n"	if $Option_Verbose;
 			pop @branching	if $branching[$#branching]{type} eq 'MAIN';
+			$update_label++;
 		}
 		elsif	($opcode eq 0x1A) {	# OPCJMP			26
 			#Unconditional jump, can be used in different branching structures:
@@ -2457,7 +2456,6 @@ sub printInstructions($){
 					label	=> $label,
 					indent	=> $#branching
 				};
-				$label		= $next_label;
 			}
 			elsif (defined $while_end && $while_end eq $destination){
 				#WHILE	Jump to end of first while in stack
@@ -2468,7 +2466,6 @@ sub printInstructions($){
 					label	=> $label,
 					indent	=> $#branching
 				};
-				$label		= $next_label;
 			}
 			elsif (defined $switch_end && $switch_end eq $destination){
 				#SWITCH	Jump to end of first while in stack
@@ -2479,17 +2476,16 @@ sub printInstructions($){
 					label	=> $label,
 					indent	=> $#branching
 				};
-				$label		= $next_label;
 			}
 			elsif ($branch_type eq 'ELSIF' && $branch_end eq $destination){
 				#ELSIF	The else part, with a possibility of an IF (0x1B) as next opcode
 				#Keep the branch, and write an else.
+				print $File_Log "\t\tELSE at $pos/$label to $destination $branch_type($branch_start-$branch_end)\n"	if $Option_Verbose;
 				push @lines, {
 					text	=> '} else {',
 					label	=> $label,
-					indent	=> $#branching
+					indent	=> $#branching - 1
 				};
-				$label		= $next_label;
 			}
 			else {
 				#GOTO
@@ -2502,8 +2498,8 @@ sub printInstructions($){
 					label	=> $label,
 					indent	=> $#branching
 				};
-				$label		= $next_label;
 			}
+			$update_label++;
 		}
 		elsif	($opcode eq 0x1B) {	# OPCJF				27
 			#Conditional jump, can indicate different branching structures:
@@ -2544,7 +2540,7 @@ sub printInstructions($){
 					label	=> $label,
 					indent	=> $#branching
 				};
-				$label		= $next_label;
+				$update_label++;
 			}
 			elsif (defined $last_destination && $last_destination eq $label) {
 				#WHILE	Jump back to start of conditional jump
@@ -2560,7 +2556,7 @@ sub printInstructions($){
 					end		=> $destination,
 					type	=> 'WHILE'
 				};
-				$label		= $next_label;
+				$update_label++;
 			}
 			elsif ($branch_type	eq 'ELSIF' && $branch_end eq $end_destination && substr($lines[$#lines]{text}, -8) eq '} else {') {
 				#ELSIF	Jump to an unconditional jump to the end of the branch
@@ -2580,10 +2576,10 @@ sub printInstructions($){
 				};
 				push @branching, {
 					start	=> $label,
-					end		=> $destination,
+					end		=> $last_destination,
 					type	=> 'ELSIF'
 				};
-				$label		= $next_label;
+				$update_label++;
 			}
 			else {
 				#IF		Simple conditional without else-clause
@@ -2598,7 +2594,7 @@ sub printInstructions($){
 					end		=> $destination,
 					type	=> 'IF'
 				};
-				$label		= $next_label;
+				$update_label++;
 			}
 		}
 		elsif	($opcode eq 0x44	# OPCJST			68
@@ -2656,16 +2652,13 @@ sub printInstructions($){
 				}
 				die "No endpoint for switch case $case"  unless defined $switch_cases[$case]{end};
 			}
-			#Write the switch statement 
+			#Write the switch statement and push the switch to branching
+			print $File_Log "\t\tSWITCH-start at $pos/$label to $endpoints[$#endpoints], ($table_start-$table_end)\n"if $Option_Verbose;
 			push @lines, {
 				text	=> "switch ($statement) {",
 				label	=> $label,
 				indent	=> $#branching
 			};
-			print $File_Log "\t\tSWITCH-start at $pos/$label to $endpoints[$#endpoints], ($table_start-$table_end)\n"if $Option_Verbose;
-			print $File_Log "\t\tCASE-start at $pos/$label, $switch_cases[0]{start}-$switch_cases[0]{end}\n"	if $Option_Verbose;
-			#Push the switch to branching, as well as the first case.
-			#Changes between cases is handled by the end of branch code.
 			push @branching, {
 				type	=> 'SWITCH',
 				start	=> $label,
@@ -2673,12 +2666,20 @@ sub printInstructions($){
 				cases	=> \@switch_cases,
 				case	=> 0
 			};
+			#Start the first case; Changes between cases is handled by the end of branch code.
+			print $File_Log "\t\tCASE-start at $pos/$label, $switch_cases[0]{start}-$switch_cases[0]{end}\n"	if $Option_Verbose;
+			push @lines, {
+				text	=> "case $switch_cases[0]{text}:",
+				label	=> $switch_cases[0]{start},
+				indent	=> $#branching
+			};
 			push @branching, {
 				type	=> 'CASE',
 				start	=> $switch_cases[0]{start},
 				end		=> $switch_cases[0]{end}
 			};
-			$label		= $next_label;
+			$label		= $switch_cases[0]{start};
+			$label_updated = 1;
 		}
 		#Unhandled opcodes
 		else{
@@ -2690,7 +2691,7 @@ sub printInstructions($){
 		while(defined $branch_end && $branch_end eq $next_label){
 			my $branch_type	= $branching[$#branching]{type};
 			if    ($branch_type eq 'EVALUATION'){
-				#Defered evaluation of shor-circuit logic operator
+				#Defered evaluation of short-circuit logic operator
 				#Operator and precedence are based on the opcode that started the branch
 				my $operator;
 				my $precedence;
@@ -2758,6 +2759,7 @@ sub printInstructions($){
 						indent	=> $#branching
 					};
 					$label	= $next_pos;
+					$label_updated++;
 				}
 				#Find the right instruction to continue at
 #				print "$print_id from $instruction ";
@@ -2776,7 +2778,7 @@ sub printInstructions($){
 					label	=> $label,
 					indent	=> $#branching
 				};
-				$label	= $next_label;
+				$update_label++;
 			}
 			elsif ($branch_type eq 'MAIN'){
 				#End of branch; ignore it as a return will catch it
@@ -2786,7 +2788,11 @@ sub printInstructions($){
 				last;
 			}
 			else {
-				warn "Unhandled end of branch $branch_type at $pos";
+				my $message	= "Unhandled end of branch $branch_type at $pos";
+				print $File_Log "\t$print_id\n"	unless $Option_Verbose;
+				print $File_Log "\t\t$message\n";
+#				print $File_Log Dumper(@instructions);
+				warn "$message for $print_id";
 				pop @branching;
 			}
 			undef $branch_end;
@@ -2799,6 +2805,8 @@ sub printInstructions($){
 			warn $fatal;
 			last;
 		}
+		#Update label if needed
+		$label		= $next_label if $update_label && not $label_updated;
 		#Stop processing when the main loop is terminated
 		last if $#branching eq -1;
 	}
@@ -2861,6 +2869,11 @@ sub printInstructions($){
 	}
 	print $File_Sourcecode "\t"				if defined $locals && $mode_prop;
 	print $File_Sourcecode "\t$locals;\n"	if defined $locals;
+	print $File_Sourcecode "//\tWARNING: Orphaned values found on stack:\n" unless $#stack eq -1;
+	for (my $i=0 ; $i<=$#stack ; $i++){
+		print $File_Sourcecode "//\t\t$stack[$i]{value}\n";
+	}
+	#Print lines
     for my $i (0 .. $#lines) {
 		#Print label if needed
 		print $File_Sourcecode "label$lines[$i]{label}:\n" 	if defined $lines[$i]{print_label};
