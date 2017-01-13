@@ -1295,6 +1295,7 @@ sub analyzeFunctionCode() {
 			warn "$obj: Code already analyzed";
 			return;
 		}	
+		print $File_Log "\tObj$obj:\n"	if $Option_Verbose;
 		$Objects[$obj]{instructions}	= analyzeCodeblock(-$obj, $codeblock);	# Note the negative ID for object function code
 	}
 }
@@ -1326,6 +1327,7 @@ sub analyzePropertyCode() {
 				warn "$prop: Code already analyzed";
 				next;
 			}
+			print $File_Log "\tObj$obj.Prop$prop:\n"	if $Option_Verbose;
 			$Objects[$obj]{properties}{$prop}{instructions}	= analyzeCodeblock($prop, $codeblock);	# Note the positive ID for property code
 		}
 	}
@@ -1345,8 +1347,6 @@ sub analyzeCodeblock($$) {
 	my $exclusion_start		= $length;
 	my $exclusion_end		= $length;
 	#Make a log header if needed
-	print $File_Log	"\tObj".(-$id).":\t$length\n"	if $id < 0 && defined $Option_Verbose;
-	print $File_Log	"\tProp$id:\t$length\n"			if $id > 0 && defined $Option_Verbose;
 	while ($pos < $length) {
 		my %instruction	= %{ analyzeOpcode($id, $codeblock, $pos) };
 		push @instructions, \%instruction;
@@ -1742,6 +1742,7 @@ sub printSource() {
 	for my $obj (0 .. $#Objects) {
 		next unless( defined $Objects[$obj]);	#Not all objects are used
 		my $type	= $Objects[$obj]{type};
+		print $File_Log "\tObj$obj:\n"	if $Option_Verbose;
 		printInstructions(-$obj, $Objects[$obj]{instructions})				if ($type eq 1);	# Functions
 	}
 	print $File_Log "Printing Object Source\n";
@@ -1837,6 +1838,7 @@ sub printObjectSource($) {
 				}
 			}
 			elsif	($Constant_Property_Type[$prop_type] eq 'code') {
+				print $File_Log "\tObj$obj.Prop$prop:\n"	if $Option_Verbose;
 				printInstructions($prop, $Objects[$obj]{properties}{$prop}{instructions});
 			}
 			else {
@@ -1868,7 +1870,6 @@ sub printInstructions($){
 	my $print_id;
 	$print_id		= "Obj".(-$id)		if $mode_obj;
 	$print_id		= "Prop$id"			if $mode_prop;
-	print $File_Log "\t$print_id:\n"	if $Option_Verbose;
 	#function header
 	my $function_arguments	= 0;
 	my $function_locals		= 0;
@@ -2235,8 +2236,8 @@ sub printInstructions($){
 				$function			= "self.$property";
 			}
 			if ($opcode eq 0x3E || $opcode eq 0x3F){	#Call to property in payload on object in payload
-				my $property		= shift @payload;
 				my $object			= shift @payload;
+				my $property		= shift @payload;
 				$function			= "$object.$property";
 			}
 			if ($opcode eq 0x47){						#Inherited call to property in payload
