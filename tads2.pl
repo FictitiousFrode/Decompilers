@@ -8,7 +8,7 @@ use Carp;					# For stack tracing at errors
 my $Time_Start	= time();	# Epoch time for start of processing
 
 ##Version History
-my $Decompiler_Version		= '0.10';
+my $Decompiler_Version		= '0.10a';
 #v0.1:	Initial structure for flow and storage
 #v0.2:	Parsing of data blocks (Headers + XSI/OBJ/RES)
 #v0.3:	Generation and parsing of symbol file
@@ -19,6 +19,7 @@ my $Decompiler_Version		= '0.10';
 #v0.8:	Code analysis: instruction printing
 #v0.9:	Minor tweaks
 #v0.10:	Various bugfixes
+#v0.10a	- payload -> operand
 
 ##Global variables##
 #File handling
@@ -57,7 +58,7 @@ my $Null_Value				= 65535;
 
 my @Constant_Property_Type	= ();
 my @Constant_Opcode			= ();
-my @Constant_Opcode_Payload	= ();
+my @Constant_Opcode_Operand	= ();
 
 #Names corresponding to the property types
 sub preloadConstants() {
@@ -171,98 +172,98 @@ sub preloadConstants() {
 	$Constant_Opcode[0x59]	= 'OPCSHR';			# 89
 	$Constant_Opcode[0x5A]	= 'OPCNEW';			# 90
 	$Constant_Opcode[0x5B]	= 'OPCDELETE';		# 91
-	#Opcode Payloads
+	#Opcode Operands
 	#based on detads, naming convention, and trial and error.
-	$Constant_Opcode_Payload[0x01]	= ['INT32'];						# 1		OPCPUSHNUM
-	$Constant_Opcode_Payload[0x02]	= ['OBJECT'];						# 2		OPCPUSHOBJ
-	$Constant_Opcode_Payload[0x03]	= ['NONE'];							# 3		OPCNEG
-	$Constant_Opcode_Payload[0x04]	= ['NONE'];							# 4		OPCNOT
-	$Constant_Opcode_Payload[0x05]	= ['NONE'];							# 5		OPCADD
-	$Constant_Opcode_Payload[0x06]	= ['NONE'];							# 6		OPCSUB
-	$Constant_Opcode_Payload[0x07]	= ['NONE'];							# 7		OPCMUL
-	$Constant_Opcode_Payload[0x08]	= ['NONE'];							# 8		OPCDIV
-	$Constant_Opcode_Payload[0x09]	= ['NONE'];							# 9		OPCAND
-	$Constant_Opcode_Payload[0x0A]	= ['NONE'];							# 10	OPCOR
-	$Constant_Opcode_Payload[0x0B]	= ['NONE'];							# 11	OPCEQ
-	$Constant_Opcode_Payload[0x0C]	= ['NONE'];							# 12	OPCNE
-	$Constant_Opcode_Payload[0x0D]	= ['NONE'];							# 13	OPCGT
-	$Constant_Opcode_Payload[0x0E]	= ['NONE'];							# 14	OPCGE
-	$Constant_Opcode_Payload[0x0F]	= ['NONE'];							# 15	OPCLT
-	$Constant_Opcode_Payload[0x10]	= ['NONE'];							# 16	OPCLE
-	$Constant_Opcode_Payload[0x11]	= ['UINT8', 'OBJECT'];				# 17	OPCCALL
-	$Constant_Opcode_Payload[0x12]	= ['UINT8', 'PROPERTY'];			# 18	OPCGETP
-	$Constant_Opcode_Payload[0x13]	= ['UINT8', 'PROPERTY'];			# 19	OPCGETPDATA		Experimental based on 0x12
-	$Constant_Opcode_Payload[0x14]	= ['LOCAL'];						# 20	OPCGETLCL
-	$Constant_Opcode_Payload[0x15]	= ['UINT8'];						# 21	OPCPTRGETPDATA	Experimental based on 0x28
-	$Constant_Opcode_Payload[0x16]	= ['UNKNOWN2'];						# 22	OPCRETURN
-	$Constant_Opcode_Payload[0x17]	= ['UNKNOWN2'];						# 23	OPCRETVAL
-	$Constant_Opcode_Payload[0x18]	= ['UINT16'];						# 24	OPCENTER
-	$Constant_Opcode_Payload[0x19]	= ['NONE'];							# 25	OPCDISCARD
-	$Constant_Opcode_Payload[0x1A]	= ['OFFSET'];						# 26	OPCJMP
-	$Constant_Opcode_Payload[0x1B]	= ['OFFSET'];						# 27	OPCJF
-	$Constant_Opcode_Payload[0x1C]	= ['NONE'];							# 28	OPCPUSHSELF
-	$Constant_Opcode_Payload[0x1D]	= ['STRING'];						# 29	OPCSAY
-	$Constant_Opcode_Payload[0x1E]	= ['UINT8', 'BUILTIN'];				# 30	OPCBUILTIN
-	$Constant_Opcode_Payload[0x1F]	= ['STRING'];						# 31	OPCPUSHSTR
-	$Constant_Opcode_Payload[0x20]	= ['LIST'];							# 32	OPCPUSHLST
-	$Constant_Opcode_Payload[0x21]	= ['NONE'];							# 33	OPCPUSHNIL
-	$Constant_Opcode_Payload[0x22]	= ['NONE'];							# 34	OPCPUSHTRUE
-	$Constant_Opcode_Payload[0x23]	= ['FUNCTION'];						# 35	OPCPUSHFN
-	$Constant_Opcode_Payload[0x24]	= ['UINT8', 'PROPERTY'];			# 36	OPCGETPSELFDATA		Experimental based on 0x3C
+	$Constant_Opcode_Operand[0x01]	= ['INT32'];						# 1		OPCPUSHNUM
+	$Constant_Opcode_Operand[0x02]	= ['OBJECT'];						# 2		OPCPUSHOBJ
+	$Constant_Opcode_Operand[0x03]	= ['NONE'];							# 3		OPCNEG
+	$Constant_Opcode_Operand[0x04]	= ['NONE'];							# 4		OPCNOT
+	$Constant_Opcode_Operand[0x05]	= ['NONE'];							# 5		OPCADD
+	$Constant_Opcode_Operand[0x06]	= ['NONE'];							# 6		OPCSUB
+	$Constant_Opcode_Operand[0x07]	= ['NONE'];							# 7		OPCMUL
+	$Constant_Opcode_Operand[0x08]	= ['NONE'];							# 8		OPCDIV
+	$Constant_Opcode_Operand[0x09]	= ['NONE'];							# 9		OPCAND
+	$Constant_Opcode_Operand[0x0A]	= ['NONE'];							# 10	OPCOR
+	$Constant_Opcode_Operand[0x0B]	= ['NONE'];							# 11	OPCEQ
+	$Constant_Opcode_Operand[0x0C]	= ['NONE'];							# 12	OPCNE
+	$Constant_Opcode_Operand[0x0D]	= ['NONE'];							# 13	OPCGT
+	$Constant_Opcode_Operand[0x0E]	= ['NONE'];							# 14	OPCGE
+	$Constant_Opcode_Operand[0x0F]	= ['NONE'];							# 15	OPCLT
+	$Constant_Opcode_Operand[0x10]	= ['NONE'];							# 16	OPCLE
+	$Constant_Opcode_Operand[0x11]	= ['UINT8', 'OBJECT'];				# 17	OPCCALL
+	$Constant_Opcode_Operand[0x12]	= ['UINT8', 'PROPERTY'];			# 18	OPCGETP
+	$Constant_Opcode_Operand[0x13]	= ['UINT8', 'PROPERTY'];			# 19	OPCGETPDATA		Experimental based on 0x12
+	$Constant_Opcode_Operand[0x14]	= ['LOCAL'];						# 20	OPCGETLCL
+	$Constant_Opcode_Operand[0x15]	= ['UINT8'];						# 21	OPCPTRGETPDATA	Experimental based on 0x28
+	$Constant_Opcode_Operand[0x16]	= ['UNKNOWN2'];						# 22	OPCRETURN
+	$Constant_Opcode_Operand[0x17]	= ['UNKNOWN2'];						# 23	OPCRETVAL
+	$Constant_Opcode_Operand[0x18]	= ['UINT16'];						# 24	OPCENTER
+	$Constant_Opcode_Operand[0x19]	= ['NONE'];							# 25	OPCDISCARD
+	$Constant_Opcode_Operand[0x1A]	= ['OFFSET'];						# 26	OPCJMP
+	$Constant_Opcode_Operand[0x1B]	= ['OFFSET'];						# 27	OPCJF
+	$Constant_Opcode_Operand[0x1C]	= ['NONE'];							# 28	OPCPUSHSELF
+	$Constant_Opcode_Operand[0x1D]	= ['STRING'];						# 29	OPCSAY
+	$Constant_Opcode_Operand[0x1E]	= ['UINT8', 'BUILTIN'];				# 30	OPCBUILTIN
+	$Constant_Opcode_Operand[0x1F]	= ['STRING'];						# 31	OPCPUSHSTR
+	$Constant_Opcode_Operand[0x20]	= ['LIST'];							# 32	OPCPUSHLST
+	$Constant_Opcode_Operand[0x21]	= ['NONE'];							# 33	OPCPUSHNIL
+	$Constant_Opcode_Operand[0x22]	= ['NONE'];							# 34	OPCPUSHTRUE
+	$Constant_Opcode_Operand[0x23]	= ['FUNCTION'];						# 35	OPCPUSHFN
+	$Constant_Opcode_Operand[0x24]	= ['UINT8', 'PROPERTY'];			# 36	OPCGETPSELFDATA		Experimental based on 0x3C
 	#37 is unused
-	$Constant_Opcode_Payload[0x26]	= ['UINT8'];						# 38	OPCPTRCALL
-	$Constant_Opcode_Payload[0x27]	= ['UNKNOWN'];						# 39	OPCPTRINH
-	$Constant_Opcode_Payload[0x28]	= ['UINT8'];						# 40	OPCPTRGETP
-	$Constant_Opcode_Payload[0x29]	= ['PROPERTY'];						# 41	OPCPASS
-	$Constant_Opcode_Payload[0x2A]	= ['NONE'];							# 42	OPCEXIT
-	$Constant_Opcode_Payload[0x2B]	= ['NONE'];							# 43	OPCABORT
-	$Constant_Opcode_Payload[0x2C]	= ['NONE'];							# 44	OPCASKDO
-	$Constant_Opcode_Payload[0x2D]	= ['PROPERTY'];						# 45	OPCASKIO
-	$Constant_Opcode_Payload[0x2E]	= ['UINT8', 'PROPERTY', 'OBJECT'];	# 46	OPCEXPINH
-	$Constant_Opcode_Payload[0x2F]	= ['UNKNOWN'];						# 47	OPCEXPINHPTR
-	$Constant_Opcode_Payload[0x30]	= ['UNKNOWN'];						# 48	OPCCALLD
-	$Constant_Opcode_Payload[0x31]	= ['UNKNOWN'];						# 49	OPCGETPD
-	$Constant_Opcode_Payload[0x32]	= ['UNKNOWN'];						# 50	OPCBUILTIND
-	$Constant_Opcode_Payload[0x33]	= ['UNKNOWN'];						# 51	OPCJE
-	$Constant_Opcode_Payload[0x34]	= ['UNKNOWN'];						# 52	OPCJNE
-	$Constant_Opcode_Payload[0x35]	= ['UNKNOWN'];						# 53	OPCJGT
-	$Constant_Opcode_Payload[0x36]	= ['UNKNOWN'];						# 54	OPCJGE
-	$Constant_Opcode_Payload[0x37]	= ['UNKNOWN'];						# 55	OPCJLT
-	$Constant_Opcode_Payload[0x38]	= ['UNKNOWN'];						# 56	OPCJLE
-	$Constant_Opcode_Payload[0x39]	= ['UNKNOWN'];						# 57	OPCJNAND
-	$Constant_Opcode_Payload[0x3A]	= ['UNKNOWN'];						# 58	OPCJNOR
-	$Constant_Opcode_Payload[0x3B]	= ['UNKNOWN'];						# 59	OPCJT
-	$Constant_Opcode_Payload[0x3C]	= ['UINT8', 'PROPERTY'];			# 60	OPCGETPSELF
-	$Constant_Opcode_Payload[0x3D]	= ['UINT8', 'PROPERTY'];			# 61	OPCGETPSLFD		Experimental based on 0x3C
-	$Constant_Opcode_Payload[0x3E]	= ['UINT8', 'OBJECT', 'PROPERTY'];	# 62	OPCGETPOBJ
-	$Constant_Opcode_Payload[0x3F]	= ['UINT8', 'OBJECT', 'PROPERTY'];	# 63	OPCGETPOBJD		Experimental based on 0x3E
-	$Constant_Opcode_Payload[0x40]	= ['NONE'];							# 64	OPCINDEX
+	$Constant_Opcode_Operand[0x26]	= ['UINT8'];						# 38	OPCPTRCALL
+	$Constant_Opcode_Operand[0x27]	= ['UNKNOWN'];						# 39	OPCPTRINH
+	$Constant_Opcode_Operand[0x28]	= ['UINT8'];						# 40	OPCPTRGETP
+	$Constant_Opcode_Operand[0x29]	= ['PROPERTY'];						# 41	OPCPASS
+	$Constant_Opcode_Operand[0x2A]	= ['NONE'];							# 42	OPCEXIT
+	$Constant_Opcode_Operand[0x2B]	= ['NONE'];							# 43	OPCABORT
+	$Constant_Opcode_Operand[0x2C]	= ['NONE'];							# 44	OPCASKDO
+	$Constant_Opcode_Operand[0x2D]	= ['PROPERTY'];						# 45	OPCASKIO
+	$Constant_Opcode_Operand[0x2E]	= ['UINT8', 'PROPERTY', 'OBJECT'];	# 46	OPCEXPINH
+	$Constant_Opcode_Operand[0x2F]	= ['UNKNOWN'];						# 47	OPCEXPINHPTR
+	$Constant_Opcode_Operand[0x30]	= ['UNKNOWN'];						# 48	OPCCALLD
+	$Constant_Opcode_Operand[0x31]	= ['UNKNOWN'];						# 49	OPCGETPD
+	$Constant_Opcode_Operand[0x32]	= ['UNKNOWN'];						# 50	OPCBUILTIND
+	$Constant_Opcode_Operand[0x33]	= ['UNKNOWN'];						# 51	OPCJE
+	$Constant_Opcode_Operand[0x34]	= ['UNKNOWN'];						# 52	OPCJNE
+	$Constant_Opcode_Operand[0x35]	= ['UNKNOWN'];						# 53	OPCJGT
+	$Constant_Opcode_Operand[0x36]	= ['UNKNOWN'];						# 54	OPCJGE
+	$Constant_Opcode_Operand[0x37]	= ['UNKNOWN'];						# 55	OPCJLT
+	$Constant_Opcode_Operand[0x38]	= ['UNKNOWN'];						# 56	OPCJLE
+	$Constant_Opcode_Operand[0x39]	= ['UNKNOWN'];						# 57	OPCJNAND
+	$Constant_Opcode_Operand[0x3A]	= ['UNKNOWN'];						# 58	OPCJNOR
+	$Constant_Opcode_Operand[0x3B]	= ['OFFSET'];						# 59	OPCJT			Experimental
+	$Constant_Opcode_Operand[0x3C]	= ['UINT8', 'PROPERTY'];			# 60	OPCGETPSELF
+	$Constant_Opcode_Operand[0x3D]	= ['UINT8', 'PROPERTY'];			# 61	OPCGETPSLFD		Experimental based on 0x3C
+	$Constant_Opcode_Operand[0x3E]	= ['UINT8', 'OBJECT', 'PROPERTY'];	# 62	OPCGETPOBJ
+	$Constant_Opcode_Operand[0x3F]	= ['UINT8', 'OBJECT', 'PROPERTY'];	# 63	OPCGETPOBJD		Experimental based on 0x3E
+	$Constant_Opcode_Operand[0x40]	= ['NONE'];							# 64	OPCINDEX
 	#65-66 are unused
-	$Constant_Opcode_Payload[0x43]	= ['POINTER'];						# 67	OPCPUSHPN
-	$Constant_Opcode_Payload[0x44]	= ['OFFSET'];						# 68	OPCJST
-	$Constant_Opcode_Payload[0x45]	= ['OFFSET'];						# 69	OPCJSF
-	$Constant_Opcode_Payload[0x46]	= ['UNKNOWN'];						# 70	OPCJMPD
-	$Constant_Opcode_Payload[0x47]	= ['UINT8', 'PROPERTY'];			# 71	OPCINHERIT
-	$Constant_Opcode_Payload[0x48]	= ['UNKNOWN'];						# 72	OPCCALLEXT
-	$Constant_Opcode_Payload[0x49]	= ['UNKNOWN'];						# 73	OPCDBGRET
-	$Constant_Opcode_Payload[0x4A]	= ['UINT16'];						# 74	OPCCONS
-	$Constant_Opcode_Payload[0x4B]	= ['SWITCH'];						# 75	OPCSWITCH
-	$Constant_Opcode_Payload[0x4C]	= ['NONE'];							# 76	OPCARGC
-	$Constant_Opcode_Payload[0x4D]	= ['UINT8'];						# 77	OPCCHKARGC
-	$Constant_Opcode_Payload[0x4E]	= ['UNKNOWN'];						# 78	OPCLINE
-	$Constant_Opcode_Payload[0x4F]	= ['FRAME'];						# 79	OPCFRAME
-	$Constant_Opcode_Payload[0x50]	= ['UNKNOWN'];						# 80	OPCBP
-	$Constant_Opcode_Payload[0x51]	= ['UNKNOWN'];						# 81	OPCGETDBLCL
-	$Constant_Opcode_Payload[0x52]	= ['UINT8'];						# 82	OPCGETPPTRSELF	Experimental
-	$Constant_Opcode_Payload[0x53]	= ['NONE'];							# 83	OPCMOD
-	$Constant_Opcode_Payload[0x54]	= ['NONE'];							# 84	OPCBAND
-	$Constant_Opcode_Payload[0x55]	= ['NONE'];							# 85	OPCBOR
-	$Constant_Opcode_Payload[0x56]	= ['NONE'];							# 86	OPCXOR
-	$Constant_Opcode_Payload[0x57]	= ['NONE'];							# 87	OPCBNOT
-	$Constant_Opcode_Payload[0x58]	= ['NONE'];							# 88	OPCSHL
-	$Constant_Opcode_Payload[0x59]	= ['NONE'];							# 89	OPCSHR
-	$Constant_Opcode_Payload[0x5A]	= ['NONE'];							# 90	OPCNEW
-	$Constant_Opcode_Payload[0x5B]	= ['NONE'];							# 91	OPCDELETE
+	$Constant_Opcode_Operand[0x43]	= ['POINTER'];						# 67	OPCPUSHPN
+	$Constant_Opcode_Operand[0x44]	= ['OFFSET'];						# 68	OPCJST
+	$Constant_Opcode_Operand[0x45]	= ['OFFSET'];						# 69	OPCJSF
+	$Constant_Opcode_Operand[0x46]	= ['UNKNOWN'];						# 70	OPCJMPD
+	$Constant_Opcode_Operand[0x47]	= ['UINT8', 'PROPERTY'];			# 71	OPCINHERIT
+	$Constant_Opcode_Operand[0x48]	= ['UNKNOWN'];						# 72	OPCCALLEXT
+	$Constant_Opcode_Operand[0x49]	= ['UNKNOWN'];						# 73	OPCDBGRET
+	$Constant_Opcode_Operand[0x4A]	= ['UINT16'];						# 74	OPCCONS
+	$Constant_Opcode_Operand[0x4B]	= ['SWITCH'];						# 75	OPCSWITCH
+	$Constant_Opcode_Operand[0x4C]	= ['NONE'];							# 76	OPCARGC
+	$Constant_Opcode_Operand[0x4D]	= ['UINT8'];						# 77	OPCCHKARGC
+	$Constant_Opcode_Operand[0x4E]	= ['UNKNOWN'];						# 78	OPCLINE
+	$Constant_Opcode_Operand[0x4F]	= ['FRAME'];						# 79	OPCFRAME
+	$Constant_Opcode_Operand[0x50]	= ['UNKNOWN'];						# 80	OPCBP
+	$Constant_Opcode_Operand[0x51]	= ['UNKNOWN'];						# 81	OPCGETDBLCL
+	$Constant_Opcode_Operand[0x52]	= ['UINT8'];						# 82	OPCGETPPTRSELF	Experimental
+	$Constant_Opcode_Operand[0x53]	= ['NONE'];							# 83	OPCMOD
+	$Constant_Opcode_Operand[0x54]	= ['NONE'];							# 84	OPCBAND
+	$Constant_Opcode_Operand[0x55]	= ['NONE'];							# 85	OPCBOR
+	$Constant_Opcode_Operand[0x56]	= ['NONE'];							# 86	OPCXOR
+	$Constant_Opcode_Operand[0x57]	= ['NONE'];							# 87	OPCBNOT
+	$Constant_Opcode_Operand[0x58]	= ['NONE'];							# 88	OPCSHL
+	$Constant_Opcode_Operand[0x59]	= ['NONE'];							# 89	OPCSHR
+	$Constant_Opcode_Operand[0x5A]	= ['NONE'];							# 90	OPCNEW
+	$Constant_Opcode_Operand[0x5B]	= ['NONE'];							# 91	OPCDELETE
 }
 
 #Game Details
@@ -1339,7 +1340,7 @@ sub analyzeCodeblock($$) {
 	#We store the analyzed code as an array of hashes
 	my @instructions		= ();
 	#Bytecode has no stored structure and has to be parsed sequentially.
-	#Some codes have embedded payload which alters the size
+	#Some codes have embedded operands which alters the size
 	my $pos					= 0;
 	my $length				= length $codeblock;
 	#There are also some areas that shouldn't be parsed, mainly the switch tables
@@ -1353,7 +1354,7 @@ sub analyzeCodeblock($$) {
 		#Read the opcode
 		my $opcode	= $instruction{opcode};
 		my $size	= $instruction{size};
-		my $payload	= arrayString($instruction{payload});
+		my $operand	= arrayString($instruction{operand});
 		#All valid opcodes below 192 are defined in the Constant_Opcode list
 		unless (defined $Constant_Opcode[$opcode] || $opcode >= 192) {
 			my $bytes = $length - ($pos + $size);
@@ -1363,8 +1364,8 @@ sub analyzeCodeblock($$) {
 #			debug($codeblock)					if defined $Option_Verbose;
 			return \@instructions;
 		}
-		print $File_Log	"\t\t$pos\t$opcode - $Constant_Opcode[$opcode] ($size bytes):\t$payload\n"	if $Option_Verbose && $opcode < 192;
-		print $File_Log	"\t\t$pos\t$opcode - Assignment ($size bytes):\t$payload\n"					if $Option_Verbose && $opcode >= 192;
+		print $File_Log	"\t\t$pos\t$opcode - $Constant_Opcode[$opcode] ($size bytes):\t$operand\n"	if $Option_Verbose && $opcode < 192;
+		print $File_Log	"\t\t$pos\t$opcode - Assignment ($size bytes):\t$operand\n"					if $Option_Verbose && $opcode >= 192;
 		$pos += $size;
 		#If we got a switch table, remember to skip over it later on.
 		if ($opcode eq 0x4B) {
@@ -1408,8 +1409,9 @@ sub analyzeOpcode($$$) {
 	my $codeblock	= shift;
 	my $pos			= shift;
 	my $opcode		= ord(substr($codeblock, $pos));
-	my $size		= 1;	# The size of the current instruction including embedded payload
-	my @payload		= ();
+	my $length		= length($codeblock);
+	my $size		= 1;	# The size of the current instruction including embedded operand
+	my @operand		= ();
 	my %instruction	= ();
 	$instruction{pos}		= $pos;
 	$instruction{opcode}	= $opcode;
@@ -1418,102 +1420,113 @@ sub analyzeOpcode($$$) {
 	if ($opcode < 192) {
 		#Some tads compilations contain unused "junk code"
 		#If we find unknown opcodes we have to stop gracefully
-		#Read embedded payload
+		#Read embedded operand
 		my @templates	= ();
-		@templates		= @{ $Constant_Opcode_Payload[$opcode] } if defined $Constant_Opcode_Payload[$opcode];
+		@templates		= @{ $Constant_Opcode_Operand[$opcode] } if defined $Constant_Opcode_Operand[$opcode];
 		foreach my $template (@templates) {
 			if	  ($template eq 'UNKNOWN') {
-				#Payload is unknown for this opcode
+				#Operand is unknown for this opcode
 				#We delay raising an error, as this might come from 'junk code' that is never called
-				push @payload, 'UNKNOWN';
+				push @operand, 'UNKNOWN-OPERAND';
 			}
 			elsif ($template eq 'INT32') {
 				#Number embedded as INT32
-				my $value	= unpack('l', substr($codeblock, $pos + $size, 4));
+				my $value	= 'UNKNOWN-INT32';
+				$value		= unpack('l', substr($codeblock, $pos + $size, 4))			if ($pos + $size + 4) < $length;
 				$size+=4;
-				push @payload, $value;
+				push @operand, $value;
 			}
 			elsif ($template eq 'UINT16') {
 				#Number embedded as UINT16
-				my $value	= unpack('S', substr($codeblock, $pos + $size, 2));
+				my $value	= 'UNKNOWN-UINT16';
+				$value		= unpack('S', substr($codeblock, $pos + $size, 2))			if ($pos + $size + 2) < $length;
 				$size+=2;
-				push @payload, $value;
+				push @operand, $value;
 			}
 			elsif ($template eq 'UINT8') {
 				#Number embedded as UINT8
-				my $value	= ord(substr($codeblock, $pos + $size, 1));
+				my $value	= 'UNKNOWN-UINT8';
+				$value		= ord(substr($codeblock, $pos + $size, 1))					if ($pos + $size + 1) < $length;
 				$size++;
-				push @payload, $value;
+				push @operand, $value;
 			}
 			elsif ($template eq 'OBJECT') {
 				#Object ID stored as UINT16
-				my $value	= decodeProperty(2, substr($codeblock, $pos + $size, 2));
+				my $value	= 'UNKNOWN-OBJECT';
+				$value		= decodeProperty(2, substr($codeblock, $pos + $size, 2))	if ($pos + $size + 2) < $length;
 				$size+=2;
-				push @payload, $value;
+				push @operand, $value;
 			}
 			elsif ($template eq 'FUNCTION') {
 				#Object ID stored as UINT16
-				my $value	= decodeProperty(10, substr($codeblock, $pos + $size, 2));
+				my $value	= 'UNKNOWN-FUNCTION';
+				$value		= decodeProperty(10, substr($codeblock, $pos + $size, 2))	if ($pos + $size + 2) < $length;
 				$size+=2;
-				push @payload, $value;
+				push @operand, $value;
 			}
 			elsif ($template eq 'PROPERTY') {
 				#Property ID stored as UINT16
-				my $value	= decodeProperty(13, substr($codeblock, $pos + $size, 2));
+				my $value	= 'UNKNOWN-PROPERTY';
+				$value		= decodeProperty(13, substr($codeblock, $pos + $size, 2))	if ($pos + $size + 2) < $length;
 				$size+=2;
-				push @payload, $value;
+				push @operand, $value;
 			}
 			elsif ($template eq 'POINTER') {
 				#Property ID stored as UINT16
-				my $value	= '&'.decodeProperty(13, substr($codeblock, $pos + $size, 2));
+				my $value	= 'UNKNOWN-POINTER';
+				$value		= '&'.decodeProperty(13, substr($codeblock, $pos + $size, 2))if ($pos + $size + 2) < $length;
 				$size+=2;
-				push @payload, $value;
+				push @operand, $value;
 			}
 			elsif ($template eq 'LOCAL') {
 				#Local variable ID stored as INT16
-				my $value	= nameLocal($id, unpack('s', substr($codeblock, $pos + $size, 2)));
+				my $value	= 'UNKNOWN-LOCAL';
+				$value		= nameLocal($id, unpack('s', substr($codeblock, $pos + $size, 2)))	if ($pos + $size + 2) < $length;
 				$size+=2;
-				push @payload, $value;
+				push @operand, $value;
 			}
 			elsif ($template eq 'BUILTIN') {
 				#Builtin macro ID stored as UINT16
-				my $value	= nameBuiltin(unpack('S', substr($codeblock, $pos + $size, 2)));
+				my $value	= 'UNKNOWN-BUILTIN';
+				$value		= nameBuiltin(unpack('S', substr($codeblock, $pos + $size, 2)))	if ($pos + $size + 2) < $length;;
 				$size+=2;
-				push @payload, $value;
+				push @operand, $value;
 			}
 			elsif ($template eq 'OFFSET') {
 				#Address in code block, stored as relative location in INT16
-				my $value	= unpack('s', substr($codeblock, $pos + $size, 2));
-				$value		+= $pos + $size if defined $value;
+				my $value	= 'UNKNOWN-OFFSET';
+				$value		= unpack('s', substr($codeblock, $pos + $size, 2))	if ($pos + $size + 2) < $length;
+				$value		+= $pos + $size 									if ($pos + $size + 2) < $length;
 				$size		+= 2;
-				push @payload, $value;
+				push @operand, $value;
 			}
 			elsif ($template eq 'STRING') {
 				#String stored as a UINT16 denoting the total length
 				my $length	= unpack('S', substr($codeblock, $pos + $size, 2));
-				my $value	= '';
+				my $value	= 'UNKNOWN-STRING';
 				$value		= decodeProperty(9, substr($codeblock, $pos + $size, $length)) if defined $length;
 				$size+=$length if defined $length;
-				push @payload, $value;
+				push @operand, $value;
 			}
 			elsif ($template eq 'LIST') {
 				#List stored as a UINT16 denoting the total length
-				my $length	= unpack('S', substr($codeblock, $pos + $size, 2));
+				my $list_length	= unpack('S', substr($codeblock, $pos + $size, 2));
 				#Code for handling junk code that's interpreted as OPCPUSHLST (0x20)
-				my $value	= '[LISTERROR]';
-				$value		= decodeProperty(7, substr($codeblock, $pos + $size, $length)) unless $pos + $length > length $codeblock;
-				$size+=$length;
-				push @payload, $value;
+				my $value	= '[UNKNOWN-LIST]';
+				$value		= decodeProperty(7, substr($codeblock, $pos + $size, $list_length))	if ($pos + $size + $list_length) < $length;
+				$size+=$list_length if defined $list_length;
+				push @operand, $value;
 			}
 			elsif ($template eq 'FRAME') {
 				#Debug frame, stored as UINT16 denoting the total length.
 				#Skipped in full.
 				my $length	= unpack('S', substr($codeblock, $pos + $size, 2));
-				$size+=$length;
+				$size+=$length if defined $length;
 			}
 			elsif ($template eq 'SWITCH') {
 				#Switch table at offset position
 				my $offset	= unpack('S', substr($codeblock, $pos + $size, 2));
+				next unless defined $offset;
 				my $subpos	= $pos + $size + $offset;
 				$size+=2;
 				#Read Switch table
@@ -1530,19 +1543,19 @@ sub analyzeOpcode($$$) {
 					$subpos				+= $switch_op{size};
 					$switch_op{target}	= $subpos + unpack('s', substr($codeblock, $subpos, 2));
 					$subpos+=2;
-					push @payload, \%switch_op;
+					push @operand, \%switch_op;
 				}
 				$instruction{switch_default}	= $subpos + unpack('s', substr($codeblock, $subpos, 2));
 				$subpos+=2;
 				$instruction{switch_end}	= $subpos;
 			}
 			elsif ($template eq 'UNKNOWN2') {
-				#Payload of known size but unknown function; skipped
-				my $value	= unpack('s', substr($codeblock, $pos + $size, 2));
+				#Operand of known size but unknown function; skipped
+#				my $value	= unpack('s', substr($codeblock, $pos + $size, 2));
 				$size+=2;
 			}
 			else{
-				die "Unhandled payload $template for opcode $opcode" unless $template eq 'NONE';
+				die "Unhandled operand $template for opcode $opcode" unless $template eq 'NONE';
 			}
 		}
 	}
@@ -1552,29 +1565,29 @@ sub analyzeOpcode($$$) {
 			#Local ID embedded as INT16
 			my $value	= nameLocal($id, unpack('s', substr($codeblock, $pos + $size, 2)));
 			$size+=2;
-			push @payload, $value;
+			push @operand, $value;
 		}
 		elsif (($opcode & 0x03) eq 0x01){
 			#Object ID embedded as INT16
 			my $value	= nameObject(unpack('s', substr($codeblock, $pos + $size, 2)));
 			$size+=2;
-			push @payload, $value;
+			push @operand, $value;
 		}
 		if    (($opcode & 0x03) eq 0x1c) {
 			#Extended opcode
 			my $value	= ord(substr($codeblock, $pos + $size, 1));
 			$size++;
-			push @payload, $value;
+			push @operand, $value;
 		}
 		return {
 			pos		=> $pos,
 			opcode	=> $opcode,
 			size	=> $size,
-			payload	=> \@payload
+			operand	=> \@operand
 		};
 	}
 	$instruction{size}		= $size,
-	$instruction{payload}	= \@payload;
+	$instruction{operand}	= \@operand;
 	return \%instruction;
 }
 #Find the best (currently: longest) vocabulary token for an object, with optional recursion
@@ -1883,7 +1896,7 @@ sub printInstructions($){
 		my $opcode			= $instructions[$instruction]{opcode};
 		my $pos				= $instructions[$instruction]{pos};
 		my $next_label		= $instructions[$instruction]{size} + $pos;
-		my @payload			= @{ $instructions[$instruction]{payload} };
+		my @operand			= @{ $instructions[$instruction]{operand} };
 		# Should label be updted to next label?
 		my $update_label	= 0;
 		my $label_updated	= 0;
@@ -1899,12 +1912,12 @@ sub printInstructions($){
 			my $variable;
 			my $variable_mask	= $opcode & 0x03;
 			if ($variable_mask eq 0x00) {
-				#Local, stored in payload
-				$variable		= shift @payload;
+				#Local, stored as operand
+				$variable		= shift @operand;
 			}
 			if ($variable_mask eq 0x01) {
-				my $property	= shift @payload;
-				#Object from stack, property from payload
+				my $property	= shift @operand;
+				#Object from stack, property from operand
 				my $obj_ref		= pop @stack;
 				my $object		= 'nil';
 				my $precedence	= 14;
@@ -1965,7 +1978,7 @@ sub printInstructions($){
 			#	5	<<=	shift left and assign
 			#	6	>>=	shift right and assign
 			if ($operator_mask eq 0x1c){
-				my $extended	= shift @payload;
+				my $extended	= shift @operand;
 				$operator	= '%='	if $extended eq 1;
 				$operator	= '&='	if $extended eq 2;
 				$operator	= '|='	if $extended eq 3;
@@ -2016,13 +2029,13 @@ sub printInstructions($){
 		#Function header arguments
 		elsif	($opcode eq 0x18) {	# OPCENTER			24
 			$fatal					= "Duplicate OPCENTER for $print_id" if $function_locals != 0;
-			$function_locals		= shift @payload;
+			$function_locals		= shift @operand;
 			$branching[0]{start}	= $next_label;
 			$update_label++;
 		}
 		elsif	($opcode eq 0x4D) {	# OPCCHKARGC		77
 			$fatal					= "Duplicate OPCENTER for $print_id" if $function_arguments != 0;
-			$function_arguments		= shift @payload;
+			$function_arguments		= shift @operand;
 			$branching[0]{start}	= $next_label;
 			$update_label++;
 		}
@@ -2039,9 +2052,9 @@ sub printInstructions($){
 			||	 $opcode eq 0x20	# OPCPUSHLST		32
 			||	 $opcode eq 0x23	# OPCPUSHFN			35
 			||	 $opcode eq 0x43	# OPCPUSHPN			67
-			) {	# Push value to stack from payload
+			) {	# Push value to stack from operand
 			push @stack, {
-				value		=> shift @payload,
+				value		=> shift @operand,
 				precedence	=> 14
 			};
 		}
@@ -2179,6 +2192,7 @@ sub printInstructions($){
 			||	 $opcode eq 0x24	# OPCGETPSELFDATA	36	EXPERIMENTAL
 			||	 $opcode eq 0x26	# OPCPTRCALL		38
 			||	 $opcode eq 0x28	# OPCPTRGETP		40
+			||	 $opcode eq 0x2E	# OPCEXPINH			46
 			||	 $opcode eq 0x3C	# OPCGETPSELF		60
 			||	 $opcode eq 0x3D	# OPCGETPSLFD		61	EXPERIMENTAL
 			||	 $opcode eq 0x3E	# OPCGETPOBJ		62
@@ -2186,24 +2200,24 @@ sub printInstructions($){
 			||	 $opcode eq 0x47	# OPCINHERIT		71
 			||	 $opcode eq 0x52	# OPCGETPPTRSELF	82	EXPERIMENTAL
 			) {	# Push result of function call
-			#Number of arguments is encoded in payload
-			my $argument_count	= shift @payload;
+			#Number of arguments is encoded in operand
+			my $argument_count	= shift @operand;
 			#Function is based on opcode
 			my $function;
 			my $precedence	= 13;
-			if ($opcode eq 0x11){						#Call to object in payload
-				$function		= shift @payload;
+			if ($opcode eq 0x11){						#Call to object in operand
+				$function			= shift @operand;
 			}
-			if ($opcode eq 0x12 || $opcode eq 0x13){	#Call to property in payload on object from stack
+			if ($opcode eq 0x12 || $opcode eq 0x13){	#Call to property in operand on object from stack
 				#EXPERIMENTAL: Assumed to be functionally identical
-				my $property	= shift @payload;
-				my $object		= 'nil';
-				my $object_prec	= 14;
-				my $object_ref	= pop @stack;
-				$object			= %{ $object_ref }{value}		if defined $object_ref;
-				$object_prec	= %{ $object_ref }{precedence}	if defined $object_ref;
-				$object			= "($object)" if $object_prec < $precedence;
-				$function		= "$object.$property";
+				my $property		= shift @operand;
+				my $object			= 'nil';
+				my $object_prec		= 14;
+				my $object_ref		= pop @stack;
+				$object				= %{ $object_ref }{value}		if defined $object_ref;
+				$object_prec		= %{ $object_ref }{precedence}	if defined $object_ref;
+				$object				= "($object)" if $object_prec < $precedence;
+				$function			= "$object.$property";
 			}
 			if ($opcode eq 0x15 || $opcode eq 0x28){	#Call to property in stack on object in stack
 				#EXPERIMENTAL: Assumed to be functionally identical
@@ -2225,24 +2239,24 @@ sub printInstructions($){
 				$property			= %{ $property_ref }{value}	if defined $property_ref;
 				$function			= "$property";
 			}
-			if ($opcode eq 0x2E){						#Inherited call to property in payload on object in payload
-				my $property		= shift @payload;
-				my $object			= shift @payload;
-				my $function		= "inherited $object.$property";
+			if ($opcode eq 0x2E){						#Inherited call to property in operand on object in operand
+				my $property		= shift @operand;
+				my $object			= shift @operand;
+				$function			= "inherited $object.$property";
 			}
 			if ($opcode eq 0x24 || $opcode eq 0x3C || $opcode eq 0x3D){	#Call to property on self
 				#EXPERIMENTAL: Assumed to be functionally identical
-				my $property		= shift @payload;
+				my $property		= shift @operand;
 				$function			= "self.$property";
 			}
-			if ($opcode eq 0x3E || $opcode eq 0x3F){	#Call to property in payload on object in payload
-				my $object			= shift @payload;
-				my $property		= shift @payload;
+			if ($opcode eq 0x3E || $opcode eq 0x3F){	#Call to property in operand on object in operand
+				my $object			= shift @operand;
+				my $property		= shift @operand;
 				$function			= "$object.$property";
 			}
-			if ($opcode eq 0x47){						#Inherited call to property in payload
-				my $property		= shift @payload;
-				$function		= "inherited $property";
+			if ($opcode eq 0x47){						#Inherited call to property in operand
+				my $property		= shift @operand;
+				$function			= "inherited $property";
 			}
 			if ($opcode eq 0x52){						#Call to property on stack
 				#EXPERIMENTAL: Based on naming
@@ -2268,10 +2282,10 @@ sub printInstructions($){
 			};
 		}
 		elsif	($opcode eq 0x1E){	# OPCBUILTIN		30
-			#Number of arguments is encoded in payload
-			my $argument_count	= shift @payload;
-			#Type of builtin is encoded in payload
-			my $type 			= shift @payload;
+			#Number of arguments is encoded in operand
+			my $argument_count	= shift @operand;
+			#Type of builtin is encoded in operand
+			my $type 			= shift @operand;
 			unless ($type eq $Translate_Builtin[0] && $argument_count eq 2){
 				#Say (type0) with 2 arguments is a special case
 				my $arguments	= '(';
@@ -2333,7 +2347,7 @@ sub printInstructions($){
 			$update_label++;
 		}
 		elsif	($opcode eq 0x1D) {	# OPCSAY			29
-			my $text	= shift @payload;
+			my $text	= shift @operand;
 			#See if we can append to previous line
 #DEPRECATED: This was good for aesthetics, but ruined GOTOs to the middle of the text.
 #			if ( defined $lines[$#lines] && substr($lines[$#lines]{text}, -4) eq '>>";') {
@@ -2354,9 +2368,9 @@ sub printInstructions($){
 			$update_label++;
 		}
 		elsif	($opcode eq 0x4A) {	# OPCCONS			74
-			#Construct a new list with the number embedded in payload elements from top of stack
-			#Number of elements is encoded in payload
-			my $element_count	= shift @payload;
+			#Construct a new list with the number embedded in operand elements from top of stack
+			#Number of elements is encoded in operand
+			my $element_count	= shift @operand;
 			#Extract elements from stack
 			my $elements	= '[';
 			for (my $i=0 ; $i<$element_count ; $i++) {
@@ -2385,7 +2399,7 @@ sub printInstructions($){
 			$text			= 'askdo'	if $opcode eq 0x2C;
 			$text			= 'askio'	if $opcode eq 0x2D;
 			my $property	= '';
-			$property		= shift @payload if $opcode eq 0x29 || $opcode eq 0x2D;
+			$property		= shift @operand if $opcode eq 0x29 || $opcode eq 0x2D;
 			$property		= "($property)" unless $property eq '';
 			push @lines, {
 				text	=> "$text$property;",
@@ -2425,8 +2439,8 @@ sub printInstructions($){
 			#	SWITCH	Break	If destination is the end of first SWITCH branch
 			#	ELSIF	ELSE	If destination is the end of current ELSIF branch
 			#	GOTO			Otherwise
-			#Get destination from payload
-			my $destination		= shift @payload;
+			#Get destination from operand
+			my $destination		= shift @operand;
 			#The relevant branching levels
 			my $branch_start	= $branching[$#branching]{start};
 			my $branch_end		= $branching[$#branching]{end};
@@ -2509,8 +2523,8 @@ sub printInstructions($){
 			#	ELSIF	Append	If the destination or last instruction before destination is an unconditional (26) jump to the end of current ELSIF
 			#			New		If the last instruction before destination is an unconditional jump forward inside current branch
 			#	IF		New		Otherwise
-			#Get destination from payload and condition from stack
-			my $destination		= shift @payload;
+			#Get destination from operand and condition from stack
+			my $destination		= shift @operand;
 			my $condition		= 'nil';
 			my $condition_ref	= pop @stack;
 			$condition			= %{ $condition_ref }{value}	if defined $condition_ref;
@@ -2526,7 +2540,7 @@ sub printInstructions($){
 				$last_id		= ($branch_id - 1) if $destination eq $instructions[$branch_id]{pos};
 			}
 			$last_opcode		= $instructions[$last_id]{opcode};
-			$last_destination	= $instructions[$last_id]{payload}[0] if $last_opcode eq 0x1A;
+			$last_destination	= $instructions[$last_id]{operand}[0] if $last_opcode eq 0x1A;
 			my $end_destination	= $destination;
 			$end_destination	= $last_destination if defined $last_destination;
 			#Determine the corresponding branching construct
@@ -2598,14 +2612,18 @@ sub printInstructions($){
 				$update_label++;
 			}
 		}
+#		elsif	($opcode eq 0x3B) {	# OPCJT				59
+			#Conditional jump, can indicate different branching structures:
+			#	
+#		}
 		elsif	($opcode eq 0x44	# OPCJST			68
 			||	 $opcode eq 0x45	# OPCJSF			69
 			) {	# Logical short-circuited evaluation
-			#We need to evaluate at the destination from payload
+			#We need to evaluate at the destination from operand
 			my $branch_start	= $branching[$#branching]{start};
 			my $branch_end		= $branching[$#branching]{end};
 			my $branch_type		= $branching[$#branching]{type};
-			my $destination		= shift @payload;
+			my $destination		= shift @operand;
 			print $File_Log "\t\tEVALUATION-start at $pos/$label to $destination $branch_type($branch_start-$branch_end)\n"	if $Option_Verbose;
 			push @branching, {
 				start	=> $label,
@@ -2615,22 +2633,22 @@ sub printInstructions($){
 			};
 		}
 		elsif	($opcode eq 0x4B) {	# OPCSWITCH			75
-			#A table of switch cases is located at the position embedded in payload;
-			#This has been unpacked to a list of opcodes with target stored in the payload.
+			#A table of switch cases is located at the position embedded in operand;
+			#This has been unpacked to a list of opcodes with target stored in the operand.
 			my $table_start		= $instructions[$instruction]{switch_start};
 			my $table_end		= $instructions[$instruction]{switch_end};
-			my @payload			= @{ $instructions[$instruction]{payload} };
+			my @operand			= @{ $instructions[$instruction]{operand} };
 			#The statement to execute the switch on is stored at top of stack
 			my $statement_ref	= pop @stack;
 			my $statement		= 'nil';
 			$statement			= %{ $statement_ref }{value}	if defined $statement_ref;
-			#Build the switch cases based on payload
+			#Build the switch cases based on operand
 			my @endpoints		= ();
 			my @switch_cases	= ();
-			for my $ref (@payload){
+			for my $ref (@operand){
 				my %entry	= %{ $ref };
 				push @switch_cases, {
-					text	=> $entry{payload}[0],
+					text	=> $entry{operand}[0],
 					start	=> $entry{target}
 				};
 				push @endpoints, $entry{target};
@@ -2920,7 +2938,7 @@ die "Use: tads2 [options] file.taf\n$Options" if ($#ARGV != 0);	# Too many unpar
 
 #Determine names to use
 $FileName_Path	= './';	# Default to no directory
-if ($ARGV[0] =~ m/([\w\s]*)\.gam/i) {	# Use the name of the input file if possible
+if ($ARGV[0] =~ m/([\w\s]*)\.(gam|rs\d)/i) {	# Use the name of the input file if possible
 	$FileName_Path			= $1 . '/'		unless defined $Option_Minimal;
 	$FileName_Generate		= $1 . '.sym'	if defined $Option_Generate;
 	$FileName_Sourcecode	= $1 . '.t';
