@@ -11,11 +11,12 @@ use Carp;					# For stack tracing at errors
 my $Time_Start	= time();	# Epoch time for start of processing
 
 ##Version History
-my $Decompiler_Version		= '0.4';
+my $Decompiler_Version		= '0.5';
 #v0.1:	Initial structure for flow and storage
 #v0.2:	Parsing of basic data blocks
 #v0.3:	Object block parsing and initial analysis
-#v0.4:	Object printing
+#v0.4:	Object printing, datatype decoding
+#v0.5:	Constant pool handling
 
 ##Global variables##
 #File handling
@@ -23,11 +24,11 @@ my $FileName_Bytecode;		# Filename for the compiled gamefile to decompile
 my $FileName_Mapping;		# Filename for the mapping/translation file, if any.
 my $FileName_Generate;		# Filename for the generated mapping file
 my $FileName_Path;			# Path to place output files in
-my $FileName_SourceCode;	# Filename for the resulting sourcecode
+my $FileName_Sourcecode;	# Filename for the resulting sourcecode
 my $FileName_Log;			# Filename for the decompilation log
 my $File_ByteCode;			# File handle for input compiled gamefile
 my $File_Mapping;			# File handle for name mapping
-my $File_SourceCode;		# File handle for output decompiled sourcecode
+my $File_Sourcecode;		# File handle for output decompiled sourcecode
 my $File_Log;				# File handle for logging output
 
 #Option handling
@@ -36,6 +37,7 @@ my $Option_Generate;	# Generate a new symbol file
 my $Option_Verbose;		# Extra information dumped to story file
 my $Options	= "Available Options:\n";
 $Options	.= "-m\t\tMinimalist mode: Skip resources and output directory\n";
+$Options	.= "-v\t\tVerbose: Extra information printed to log\n";
 $Options	.= "-s [file]:\tSymbol file: Parse the file for symbol mappings\n";
 $Options	.= "+s\t\tGenerate symbol file: Store symbol mapping in output directory\n";
 
@@ -45,6 +47,8 @@ my $Size_File_Signature		= 11;
 my $Size_Block_Header		= 10;
 
 my $Signature_TADS3_Image	= chr(0x54).chr(0x33).chr(0x2D).chr(0x69).chr(0x6D).chr(0x61).chr(0x67).chr(0x65).chr(0x0D).chr(0x0A).chr(0x1A);
+
+my @Constant_Dataholder_Type	= ();
 
 #Game Details
 my $Timestamp_Image;		# Timestamp for when the image was written, for comparison
@@ -65,6 +69,45 @@ my @Constant_Pages			= ();
 my @Metaclass_Names			= ();
 my @Metaclass_Versions		= ();
 my @Objects					= ();
+
+sub preloadConstants() {
+	$Constant_Dataholder_Type[1]	= 'VM_NIL';		# boolean "false" or null pointer
+	$Constant_Dataholder_Type[2]	= 'VM_TRUE';	# boolean "true"
+	$Constant_Dataholder_Type[3]	= 'VM_STACK';	# Reserved for implementation use for storing native machine pointers to stack frames
+	$Constant_Dataholder_Type[4]	= 'VM_CODEPTR';	# Reserved for implementation use for storing native machine pointers to code
+	$Constant_Dataholder_Type[5]	= 'VM_OBJ';		# object reference as a 32-bit unsigned object ID number
+	$Constant_Dataholder_Type[6]	= 'VM_PROP';	# property ID as a 16-bit unsigned number
+	$Constant_Dataholder_Type[7]	= 'VM_INT';		# integer as a 32-bit signed number
+	$Constant_Dataholder_Type[8]	= 'VM_SSTRING';	# single-quoted string; 32-bit unsigned constant pool offset
+	$Constant_Dataholder_Type[9]	= 'VM_DSTRING';	# double-quoted string; 32-bit unsigned constant pool offset
+	$Constant_Dataholder_Type[10]	= 'VM_LIST';	# list constant; 32-bit unsigned constant pool offset
+	$Constant_Dataholder_Type[11]	= 'VM_CODEOFS';	# code offset; 32-bit unsigned code pool offset
+	$Constant_Dataholder_Type[12]	= 'VM_FUNCPTR';	# function pointer; 32-bit unsigned code pool offset
+	$Constant_Dataholder_Type[13]	= 'VM_EMPTY';	# no value
+	$Constant_Dataholder_Type[14]	= 'VM_NATIVE_CODE';	# Reserved for implementation use for storing native machine pointers to native code
+	$Constant_Dataholder_Type[15]	= 'VM_ENUM';	# enumerated constant; 32-bit integer
+	$Constant_Dataholder_Type[16]	= 'VM_BIFPTR';	# built-in function pointer; 32-bit integer, encoding the function set dependency table index in the high-order 16 bits, and the function's index within its set in the low-order 16 bits.
+	$Constant_Dataholder_Type[17]	= 'VM_OBJX';	# Reserved for implementation use for an executable object, as a 32-bit object ID number
+}
+
+##Translation
+my @Translate_Object_Name		= ();
+my @Translate_Property			= ();
+sub nameObject($) {
+	my $id = shift;
+	return 'nullObj'					unless defined $id;
+#	return 'nullObj'					if $id eq $Null_Value;
+	return $Translate_Object_Name[$id]	if defined $Translate_Object_Name[$id];
+	return "Obj$id";
+}
+sub nameProperty($) {
+	my $id = shift;
+	return 'nullprop'				unless defined $id;
+#	return 'nullprop'				if $id eq $Null_Value;
+	return $Translate_Property[$id] if defined $Translate_Property[$id];
+	return "prop$id";
+}
+
 
 ##File Handling
 sub debug($;$) {
@@ -443,8 +486,136 @@ sub analyzeObjects(){
 		print $File_Log "\tObj$obj: $superclasses superclasses, $properties properties\n";# if $Option_Verbose;
 	}
 }
+sub propertyString($$){
+	my $obj		= shift;
+	my $prop	= shift;
+	die "propertyString needs both Object and Property id"		unless defined $obj && defined $prop;
+	die "Can't access property $prop on undefined object $obj"	unless defined $Objects[$obj];
+	my $data	= $Objects[$obj]{property}{$prop};
+	return decodeDataHolder($data);
+}
+sub decodeDataHolder($);
+sub decodeDataHolder($) {
+	my $data	= shift;
+	#Determine type and name from first byte
+	my $type	= ord(substr($data, 0, 1));
+	my $name	= $Constant_Dataholder_Type[$type];
+	#All dataholders should be 5 bytes long, with the last 4 for payload
+	my $payload_short	= unpack('s', substr($data, 1, 2));
+	my $payload_long	= unpack('l', substr($data, 1, 4));
+	#Reserved types, these should never occur
+	return $name	if $name eq 'VM_STACK';			# 3
+	return $name	if $name eq 'VM_CODEPTR';		# 4
+	return $name	if $name eq 'VM_NATIVE_CODE';	# 14
+	return $name	if $name eq 'VM_OBJX';			# 17
+	#Simple dataholders without payload
+	return 'nil'	if $name eq 'VM_NIL';			# 1
+	return 'true'	if $name eq 'VM_TRUE';			# 2
+	return 'NULL'	if $name eq 'VM_EMPTY';			# 13
+	#Payload that can be resolved immediately
+	return nameObject($payload_long)		if $name eq 'VM_OBJ';	# 5
+	return nameProperty($payload_short)		if $name eq 'VM_PROP';	# 6
+	return $payload_long					if $name eq 'VM_INT';	# 7
+	return "enum$payload_long"				if $name eq 'VM_ENUM';	# 15
+	return $payload_long					if $name eq 'VM_BIFPTR';# 16 - TODO use naming
+	#Constant Pool Data
+	#TODO: Check if quotes are included for these
+	return interpretString($payload_long, "'")	if $name eq 'VM_SSTRING';	# 8	
+	return interpretString($payload_long, '"')	if $name eq 'VM_DSTRING';	# 9
+	return interpretList($payload_long, $data)	if $name eq 'VM_LIST';		# 10	
+	#Constant Pool Data
+	return interpretCode($payload_long)		if $name eq 'VM_CODEOFS';	# 11
+	return interpretCode($payload_long)		if $name eq 'VM_FUNCPTR';	# 12
+	
+	#Unknown dataholder
+	warn "Unknown dataholder $data";
+	return "UNKNOWN$data";
+}
 
+#Strings are stored in the Constant Pool with a UINT16 size followed by that number of characters
+sub interpretString($$){
+	use integer;		# Integer division is needed for determining correct codepage
+	my $address	= shift;
+	my $quoted	= shift;
+	my $page	= $address / $Constant_Definitions[2]{size};
+	my $offset	= $address % $Constant_Definitions[2]{size};
+	my $size	= unpack('S', substr($Constant_Pages[2][$page], $offset, 2));
+	my $text	= substr($Constant_Pages[2][$page], $offset+2, $size);
+	return "$quoted$text$quoted";
+#	print $File_Log "DEBUG\tInterpreting constant pool address $address to page $page offset $offset\n";
+#	print "Constant $address -> $page:$offset\n";
+#	my $test	= substr($Constant_Pages[2][$page], $offset, $size+2);
+#	debug $test;
+#	return "Constant $page:$offset";
+}
+#Lists are stored in the Constant Pool with a UINT16 number of entries followed by that number of data holders (5 bytes each)
+sub interpretList($){
+	use integer;		# Integer division is needed for determining correct codepage
+	my $address	= shift;
+	my $quoted	= shift;
+	my $page	= $address / $Constant_Definitions[2]{size};
+	my $offset	= $address % $Constant_Definitions[2]{size};
+	my $entries	= unpack('S', substr($Constant_Pages[2][$page], $offset, 2));
+	my $list	= '[';
+	for (my $entry = 0 ; $entry < $entries ; $entry++){
+		$list	.= decodeDataHolder(substr($Constant_Pages[2][$page], $offset + 2 + $entry * 5, 5));
+		$list	.= ', ' if $entry != $entries-1;
+	}
+	$list	.= ']';
+	return $list;
+#	print $File_Log "DEBUG\tInterpreting constant pool address $address to page $page offset $offset\n";
+#	print "Constant $address -> $page:$offset\n";
+#	my $test	= substr($Constant_Pages[2][$page], $offset, 2 + 5 * $entries);
+#	debug $test;
+#	return "Constant $page:$offset";
+}
+sub interpretCode($){
+	my $address	= shift;
+	return "Code@ $address";
+}
 
+##Output
+#Generate and print the corresponding TADS source code
+sub printSource() {
+	print $File_Log "Printing Object Source\n";
+	print $File_Sourcecode "\n\n//\t## Objects ##\n";
+	for my $obj (0 .. $#Objects) {
+		#Not all Object ID's are actually used
+		next unless defined $Objects[$obj];
+		#Only analyze TADS objects
+		my $metaclass	= $Metaclass_Names[$Objects[$obj]{metaclass}];
+		next unless $metaclass eq 'tads-object';
+		printObjectSource($obj);
+	}
+}
+sub printObjectSource($){
+	my $obj	= shift;
+	print $File_Sourcecode 'class ' if $Objects[$obj]{flags}{isClass};
+	print $File_Sourcecode nameObject($obj) . ': ';
+	if (defined $Objects[$obj]{superclass}) {
+		my @parents	= @{ $Objects[$obj]{superclass} };
+		for my $i (0 .. $#parents) {
+			print $File_Sourcecode ', ' if $i > 0;
+			print $File_Sourcecode nameObject($parents[$i]);
+		}
+	}
+	else {
+		print $File_Sourcecode 'object';
+	}
+	print $File_Sourcecode "\n";
+	#Decode information
+	print $File_Sourcecode	"\t//\tObj$obj\t = '".nameObject($obj)."'\n";
+	#Data properties
+	if (defined $Objects[$obj]{property}) {
+		my $count = keys %{ $Objects[$obj]{property} };
+		print $File_Sourcecode "\t// $count properties\n";
+		for my $prop ( sort {$a <=> $b} keys %{ $Objects[$obj]{property} } ) {
+			my $name	= nameProperty($prop);
+			my $value	= propertyString($obj, $prop);
+			print $File_Sourcecode "\t$name\t= $value\n";
+		}
+	}
+}
 
 ##Main Program Loop
 #Parse command-line arguments
@@ -475,12 +646,12 @@ $FileName_Path	= './';	# Default to no directory
 if ($ARGV[0] =~ m/([\w\s]*)\.t3/i){	# Use the name of the input file if possible
 	$FileName_Path			= $1 . '/'		unless defined $Option_Minimal;
 	$FileName_Generate		= $1 . '.sym'	if defined $Option_Generate;
-	$FileName_SourceCode	= $1 . '.t';
+	$FileName_Sourcecode	= $1 . '.t';
 	$FileName_Log			= $1 . '.log';
 }
 else{
 	$FileName_Path			= 'decoded/'	unless defined $Option_Minimal;
-	$FileName_SourceCode	= 'source.t';
+	$FileName_Sourcecode	= 'source.t';
 	$FileName_Log			= 'decompile.log';
 	$FileName_Generate		= $1 . '.sym'	if defined $Option_Generate;
 }
@@ -502,7 +673,7 @@ open($File_Log, "> :raw :bytes :unix", $FileName_Path . $FileName_Log) # Use :un
 print "Parsing $FileName_Bytecode\n";
 open($File_ByteCode, "< :raw :bytes", $FileName_Bytecode)
 	|| die("Couldn't open $FileName_Bytecode for reading.");
-#TODO	preloadConstants();								# Populate arrays with TADS3 constants
+preloadConstants();								# Populate arrays with TADS3 constants
 parseHeader();									# Read header and determine version/type of file
 parseFile();									# Parse the input file into the local data structures
 close($File_ByteCode);
@@ -513,11 +684,12 @@ analyze();
 #TODO	generateMapping() if $Option_Generate;			# Generate symbol file if called for
 
 #TODO: Generate source code
-open($File_SourceCode, "> :raw :bytes", $FileName_Path . $FileName_SourceCode)
-	|| die "$0: can't open " . $FileName_Path . $FileName_SourceCode . "for writing: $!";
+open($File_Sourcecode, "> :raw :bytes", $FileName_Path . $FileName_Sourcecode)
+	|| die "$0: can't open " . $FileName_Path . $FileName_Sourcecode . "for writing: $!";
 print "Writing results...\n";
+printSource();									# Print TADS source based on bytecode
 
 #Close file output
-close($File_SourceCode);
+close($File_Sourcecode);
 close($File_Log);
 print "Decompiling completed in ".(time - $Time_Start)." seconds.\n";
