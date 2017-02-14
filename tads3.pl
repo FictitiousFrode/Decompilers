@@ -11,12 +11,13 @@ use Carp;					# For stack tracing at errors
 my $Time_Start	= time();	# Epoch time for start of processing
 
 ##Version History
-my $Decompiler_Version		= '0.5';
+my $Decompiler_Version		= '0.6';
 #v0.1:	Initial structure for flow and storage
 #v0.2:	Parsing of basic data blocks
 #v0.3:	Object block parsing and initial analysis
 #v0.4:	Object printing, datatype decoding
 #v0.5:	Constant pool handling
+#v0.6:	Symbol file parsing
 
 ##Global variables##
 #File handling
@@ -69,7 +70,16 @@ my @Constant_Pages			= ();
 my @Metaclass_Names			= ();
 my @Metaclass_Versions		= ();
 my @Objects					= ();
+#Mappings
+my @Translate_Object_Name		= ();
+my @Translate_Object_Argument	= ();
+my @Translate_Object_Local		= ();
+my @Translate_Property_Name		= ();
+my @Translate_Property_Argument	= ();
+my @Translate_Property_Local	= ();
 
+
+#Mapping File Handling
 sub preloadConstants() {
 	$Constant_Dataholder_Type[1]	= 'VM_NIL';		# boolean "false" or null pointer
 	$Constant_Dataholder_Type[2]	= 'VM_TRUE';	# boolean "true"
@@ -89,10 +99,51 @@ sub preloadConstants() {
 	$Constant_Dataholder_Type[16]	= 'VM_BIFPTR';	# built-in function pointer; 32-bit integer, encoding the function set dependency table index in the high-order 16 bits, and the function's index within its set in the low-order 16 bits.
 	$Constant_Dataholder_Type[17]	= 'VM_OBJX';	# Reserved for implementation use for an executable object, as a 32-bit object ID number
 }
-
+sub parseMapping() {
+	open($File_Mapping, "< :raw :bytes", $FileName_Mapping)
+		|| die("Couldn't open $FileName_Mapping for reading.");
+	my $line;
+	while ($line = <$File_Mapping>) {
+		#Pre-process the line
+		chomp $line;
+		next if $line eq '';					# Skip empty lines
+		next if (substr($line, 0, 1) eq '#');	# Skip full-line comments
+		$line	= (split('#', $line))[0];		# Remove comments
+		my $parsed;
+		#Builtins are not translated
+#		if($line =~ m/(Action|Act)s?\[?(\d*)\]?\s*=\s*['"](.*)['"]/i ) {
+#			$parsed 									= $3;
+#			$Translate_Action[$2]						= $parsed;
+#		}
+		if($line =~ m/(Object|Obj)s?\[?(\d*)\]?\s*=\s*['"](.*)['"]/i ) {
+			$parsed 									= $3;
+			$Translate_Object_Name[$2]					= $parsed;
+		}
+		if($line =~ m/(Object|Obj)s?[-_]?(Arg|Argument)?\[?(\d*)[.-](\d*)\]?\s*=\s*['"](.*)['"]/i ) {
+			$parsed 									= $5;
+			$Translate_Object_Argument[$3][$4 - 1]		= $parsed;
+		}
+		if($line =~ m/(Object|Obj)s?[-_]?(Loc|Local)?\[?(\d*)[.-](\d*)\]?\s*=\s*['"](.*)['"]/i ) {
+			$parsed 									= $5;
+			$Translate_Object_Local[$3][$4 - 1]			= $parsed;
+		}
+		if($line =~ m/(Property|Properties|Props|Prop)\[?(\d*)\]?\s*=\s*['"](.*)['"]/i ) {
+			$parsed 									= $3;
+			$Translate_Property_Name[$2]				= $parsed;
+		}
+		if($line =~ m/(Property|Props|Prop)[-_]?(Arg|Argument)?\[?(\d*)[.-](\d*)\]?\s*=\s*['"](.*)['"]/i ) {
+			$parsed 									= $5;
+			$Translate_Property_Argument[$3][$4 - 1]	= $parsed;
+		}
+		if($line =~ m/(Property|Props|Prop)[-_]?(Loc|Local)?\[?(\d*)[.-](\d*)\]?\s*=\s*['"](.*)['"]/i ) {
+			$parsed 									= $5;
+			$Translate_Property_Local[$3][$4 - 1]		= $parsed;
+		}
+		print "Unable to parse $line\n" unless defined $parsed;
+	}
+	close $File_Mapping;
+}
 ##Translation
-my @Translate_Object_Name		= ();
-my @Translate_Property			= ();
 sub nameObject($) {
 	my $id = shift;
 	return 'nullObj'					unless defined $id;
@@ -102,10 +153,36 @@ sub nameObject($) {
 }
 sub nameProperty($) {
 	my $id = shift;
-	return 'nullprop'				unless defined $id;
-#	return 'nullprop'				if $id eq $Null_Value;
-	return $Translate_Property[$id] if defined $Translate_Property[$id];
+	return 'nullprop'						unless defined $id;
+#	return 'nullprop'						if $id eq $Null_Value;
+	return $Translate_Property_Name[$id]	if defined $Translate_Property_Name[$id];
 	return "prop$id";
+}
+sub nameLocal($$) {
+	my $id		= shift;	# Negative for object functions, positive for properties
+	my $value	= shift;	# Negative for arguments, positive for locals
+	return 'UnknownArg' unless defined $value;
+	# Arg1 is stored at index 0, etc
+	if ($value > 0) {
+		my $local	= $value;
+		if ($id > 0) {	# Properties
+			return $Translate_Property_Local[$id][$local - 1]	if defined $Translate_Property_Local[$id][$local - 1];
+		}
+		else {			# Functions
+			return $Translate_Object_Local[-$id][$local - 1]	if defined $Translate_Object_Local[-$id][$local - 1];
+		}
+		return "local$local";
+	}
+	else {
+		my $arg		= -1 * $value;
+		if ($id > 0) {	# Properties
+			return $Translate_Property_Argument[$id][$arg - 1]	if defined $Translate_Property_Argument[$id][$arg - 1];
+		}
+		else {			# Functions
+			return $Translate_Object_Argument[-$id][$arg - 1]	if defined $Translate_Object_Argument[-$id][$arg - 1];
+		}
+		return "arg$arg";
+	}
 }
 
 
@@ -678,7 +755,7 @@ parseHeader();									# Read header and determine version/type of file
 parseFile();									# Parse the input file into the local data structures
 close($File_ByteCode);
 #TODO	preloadMapping();								# Load mapping defaults
-#TODO	parseMapping() if defined $FileName_Mapping;	# Read symbol file if called for
+parseMapping() if defined $FileName_Mapping;	# Read symbol file if called for
 print "Analyzing...\n";
 analyze();
 #TODO	generateMapping() if $Option_Generate;			# Generate symbol file if called for
