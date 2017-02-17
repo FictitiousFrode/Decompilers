@@ -10,10 +10,11 @@ use Carp;					# For stack tracing at errors
 my $Time_Start	= time();	# Epoch time for start of processing
 
 ##Version History
-my $Decompiler_Version		= '0.3';
+my $Decompiler_Version		= '0.4';
 #v0.1:	Initial structure for flow and storage
 #v0.2:	Signature parsing, inflation/decryption of source
 #v0.3:	Raw dump
+#v0.4:	Parse header
 
 ##Global variables##
 #File handling
@@ -55,8 +56,10 @@ my $Signature_v4	= $Signature_Base.chr(0x93).chr(0x45).chr(0x3e).chr(0x61).chr(0
 my $Signature_v39	= $Signature_Base.chr(0x94).chr(0x45).chr(0x37).chr(0x61).chr(0x39).chr(0xfa);
 my $Signature_v38	= $Signature_Base.chr(0x94).chr(0x45).chr(0x36).chr(0x61).chr(0x39).chr(0xfa);
 
+#Game Details
 my $Gamefile_Version;
-
+my %Game;
+my %Settings;
 ##Translation
 
 #Mappings
@@ -68,11 +71,23 @@ my $Gamefile_Version;
 ##File Handling
 #The next Single-Line Value
 sub nextSLV(){
-	return $Lines[$Lines_Next];
+	return $Lines[$Lines_Next++];
 }
 #The next Multi-Line Value
 sub nextMLV(){
-
+	my $block;
+	my $terminated;
+	my $terminator;
+	$terminator		= chr( 42).chr( 42)	if $Gamefile_Version eq '3.80';
+	$terminator		= chr( 42).chr( 42)	if $Gamefile_Version eq '3.90';
+	$terminator		= chr(189).chr(208)	if $Gamefile_Version eq '4.00';
+	do {
+		my $line	= nextSLV();
+		$terminated	= 1			if $terminator eq substr ($line, -2);
+		$block		.= "\n"		if defined $block;
+		$block		.=  $line;
+	} until defined $terminated;
+	return $block;
 }
 #PRNG/Decryption
 my $PRNG_CST1 		= 0x43fd43fd;
@@ -85,8 +100,7 @@ sub nextPRNG(){
 	$PRNG_STATE = ($PRNG_STATE * $PRNG_CST1 + $PRNG_CST2) & $PRNG_CST3;
 	return (255 * $PRNG_STATE) / ($PRNG_CST3 + 1);
 }
-
-##Parsing
+#Read in the file, using signature to determine version
 sub readFile(){
 	my $block_signature;
 	my $bytes_read = read ($File_Compiled, $block_signature, $Signature_Size);
@@ -135,13 +149,133 @@ sub inflateFile(){
 	#Split and store lines
 	@Lines = split(chr(13).chr(10), $inflated);
 }
-
+##Parsing
 sub parseHeader(){
+	#Intro Text
+	$Game{Intro}			= nextMLV();
+	$Game{Start}			= nextSLV() + 1;	# The only place rooms are indexed from 0
+	$Game{Ending}			= nextMLV();
+	#text	GameName
+	$Game{GameName}			= nextSLV();
+	#text	GameAuthor 
+	$Game{GameAuthor}		= nextSLV();
+	#number	MaxCarried
+	my $max_carried			= nextSLV()	if $Gamefile_Version eq '3.80'; #TODO postprocessing into MaxSize and MaxWeight
+	#text	DontUnderstand 
+	$Game{Error}			= nextSLV();
+	#number	Perspective 
+	$Game{Perspective}		= nextSLV();
+	#truth	ShowExits 
+	$Game{ShowExits}		= nextSLV();
+	#number	WaitTurns
+	$Game{WaitTurns}		= nextSLV();
+	#truth	DispFirstRoom 
+	$Game{InitialLook}		= 0			if $Gamefile_Version eq '3.80';
+	$Game{InitialLook}		= nextSLV()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	#truth	BattleSystem
+	$Game{EnableBattle}		= 0			if $Gamefile_Version eq '3.80';
+	$Game{EnableBattle}		= nextSLV()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	#number	MaxScore
+	$Game{MaxScore}			= 0			if $Gamefile_Version eq '3.80';
+	$Game{MaxScore}			= nextSLV()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	#text	PlayerName
+	$Game{PlayerName}		= ''		if $Gamefile_Version eq '3.80';
+	$Game{PlayerName}		= nextSLV()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	#truth	PromptName
+	$Game{PromptName}		= 0			if $Gamefile_Version eq '3.80';
+	$Game{PromptName}		= nextSLV()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	#text	PlayerDesc
+	$Game{PlayerDesc}		= ''		if $Gamefile_Version eq '3.80';
+	$Game{PlayerDesc}		= nextSLV()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	#number	Task
+	$Game{AltDescTask}		= 0			if $Gamefile_Version eq '3.80';
+	$Game{AltDescTask}		= nextSLV()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	#text	AltDesc
+	$Game{AltDesc}			= nextSLV()	if $Game{AltDescTask};
+	#number	Position
+	$Game{Position}			= 0			if $Gamefile_Version eq '3.80';
+	$Game{Position}			= nextSLV()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	#number	ParentObject
+	$Game{ParentObject}		= 0			if $Gamefile_Version eq '3.80';
+	$Game{ParentObject}		= nextSLV()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	#number	PlayerGender
+	$Game{PlayerGender}		= 0			if $Gamefile_Version eq '3.80';
+	$Game{PlayerGender}		= nextSLV()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	#number	MaxSize
+	$Game{MaxSize}			= 0			if $Gamefile_Version eq '3.80';	#TODO Process $max_carried into this
+	$Game{MaxSize}			= nextSLV()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	#number	MaxWeight
+	$Game{MaxWeight}		= 0			if $Gamefile_Version eq '3.80';	#TODO Process $max_carried into this
+	$Game{MaxWeight}		= nextSLV()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	#battle	PlayerStats
+	$Game{PlayerStats}		= parseBattle()	if $Game{EnableBattle};
+	#truth	EightPointCompass
+	$Game{ExpandedCompass}	= 0			if $Gamefile_Version eq '3.80';
+	$Game{ExpandedCompass}	= nextSLV()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	#truth	NoDebug			SKIP
+	nextSLV()							if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	#truth	NoScoreNotify
+	$Game{NoScoreNotify}	= 1			if $Gamefile_Version eq '3.80';
+	$Game{NoScoreNotify}	= nextSLV()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	#truth	DisableMap
+	$Game{DisableMap}		= 0			if $Gamefile_Version eq '3.80';
+	$Game{DisableMap}		= nextSLV()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	#truth	NoAutoComplete	SKIP
+	nextSLV()							if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	#truth	NoControlPanel	SKIP
+	nextSLV()							if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	#truth	NoMouse			SKIP
+	nextSLV()							if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	#truth	Sound
+	$Game{EnableSound}		= 0			if $Gamefile_Version eq '3.80';
+	$Game{EnableSound}		= nextSLV()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	#truth	Graphics
+	$Game{EnableGraphics}	= 0			if $Gamefile_Version eq '3.80';
+	$Game{EnableGraphics}	= nextSLV()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	#resource	IntroRes
+	$Game{IntroRes}			= parseResource()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	#resource	WinRes
+	$Game{WinRes}			= parseResource()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	#truth	StatusBox
+	$Game{EnableStatusBox}	= 0			if $Gamefile_Version eq '3.80' or $Gamefile_Version eq '3.90';
+	$Game{EnableStatusBox}	= nextSLV()	if $Gamefile_Version eq '4.00';
+	#text	StatusBoxText
+	$Game{StatusBoxText}	= ''		if $Gamefile_Version eq '3.80' or $Gamefile_Version eq '3.90';
+	$Game{StatusBoxText}	= nextSLV()	if $Gamefile_Version eq '4.00';
+	#2x	Unknown				SKIP
+	nextSLV()							if $Gamefile_Version eq '4.00';
+	nextSLV()							if $Gamefile_Version eq '4.00';
+	#truth	Embedded
+	$Game{Embedded}			= 0			if $Gamefile_Version eq '3.80' or $Gamefile_Version eq '3.90';
+	$Game{Embedded}			= nextSLV()	if $Gamefile_Version eq '4.00';
 	#Write to log
-	print $File_Log "Decompiler v$Decompiler_Version on $FileName_Compiled ";
-
+	print $File_Log "Decompiler v$Decompiler_Version on $FileName_Compiled, $Game{GameName} by $Game{GameAuthor} (ADRIFT v$Gamefile_Version)\n";
+	print $File_Log "\tBattles\n"		if $Game{EnableBattle};
+	print $File_Log "\tCompass\n"		if $Game{ExpandedCompass};
+	print $File_Log "\tGraphics\n"		if $Game{EnableGraphics};
+	print $File_Log "\tSound\n"			if $Game{EnableSound};
 }
-
+sub parseBattle(){
+	die 'Fatal error: Battle system is not implemented';
+}
+sub parseResource(){
+	my %resource;
+	if($Game{EnableSound}){
+		#text	SoundFile
+		$resource{SoundFile}	= nextSLV();
+		#number	SoundLen
+		$resource{SoundSize}	= 0			if $Gamefile_Version eq '3.90';
+		$resource{SoundSize}	= nextSLV()	if $Gamefile_Version eq '4.00';
+	}
+	if($Game{EnableGraphics}){
+		#text	GraphicFile
+		$resource{GraphicFile}	= nextSLV();
+		#number	GraphicLen
+		$resource{GraphicSize}	= 0			if $Gamefile_Version eq '3.90';
+		$resource{GraphicSize}	= nextSLV()	if $Gamefile_Version eq '4.00';
+	}
+	return \%resource;
+}
 ##Analyzing
 
 ##Output
