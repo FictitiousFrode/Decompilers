@@ -10,21 +10,22 @@ use Carp;					# For stack tracing at errors
 my $Time_Start	= time();	# Epoch time for start of processing
 
 ##Version History
-my $Decompiler_Version		= '0.2';
+my $Decompiler_Version		= '0.3';
 #v0.1:	Initial structure for flow and storage
 #v0.2:	Signature parsing, inflation/decryption of source
+#v0.3:	Raw dump
 
 ##Global variables##
 #File handling
-my $FileName_Bytecode;		# Filename for the compiled gamefile to decompile
+my $FileName_Compiled;		# Filename for the compiled gamefile to decompile
 my $FileName_Mapping;		# Filename for the mapping/translation file, if any.
 my $FileName_Generate;		# Filename for the generated mapping file
 my $FileName_Path;			# Path to place output files in
-my $FileName_Sourcecode;	# Filename for the resulting sourcecode
-my $FileName_Log;			# Filename for the decompilation log
-my $File_Bytecode;			# File handle for input compiled gamefile
+my $FileName_Decompiled;	# Filename for the decompiled sourcecode
+my $FileName_Log;			# Filename for the log
+my $File_Compiled;			# File handle for input compiled gamefile
 my $File_Mapping;			# File handle for name mapping
-my $File_Sourcecode;		# File handle for output decompiled sourcecode
+my $File_Decompiled;		# File handle for output decompiled sourcecode
 my $File_Log;				# File handle for logging output
 
 #Input
@@ -35,6 +36,7 @@ my $Lines_Next;				# Index of next entry in @Lines
 my $Option_Minimal;		# Skip output directory and embedded resources
 my $Option_Generate;	# Generate a new symbol file
 my $Option_Verbose;		# Extra information dumped to story file
+my $Option_Rawdump;		# Dump raw decompiled source
 my $Option_Naming;		# Be extra aggressive on trying to determine names
 						# TODO: This will create duplicate names, remake to avoid that
 my $Options	= "Available Options:\n";
@@ -43,6 +45,7 @@ $Options	.= "-v\t\tVerbose: Extra information printed to log\n";
 $Options	.= "-a\t\tAggressive naming: Try extra hard to find names of objects and properties\n";
 $Options	.= "+s\t\tGenerate symbol file: Store symbol mapping in output directory\n";
 $Options	.= "-s [file]:\tSymbol file: Parse the file for symbol mappings\n";
+$Options	.= "+r\t\tRaw dump of decompiled source\n";
 
 #Constants
 my $Signature_Size	= 14;
@@ -63,6 +66,14 @@ my $Gamefile_Version;
 #Mapping File Handling
 
 ##File Handling
+#The next Single-Line Value
+sub nextSLV(){
+	return $Lines[$Lines_Next];
+}
+#The next Multi-Line Value
+sub nextMLV(){
+
+}
 #PRNG/Decryption
 my $PRNG_CST1 		= 0x43fd43fd;
 my $PRNG_CST2 		= 0x00c39ec3;
@@ -76,41 +87,42 @@ sub nextPRNG(){
 }
 
 ##Parsing
-sub parseSignature(){
+sub readFile(){
 	my $block_signature;
-	my $bytes_read = read ($File_Bytecode, $block_signature, $Signature_Size);
+	my $bytes_read = read ($File_Compiled, $block_signature, $Signature_Size);
 	die 'Unable to read file signature' unless $bytes_read eq $Signature_Size;
 	if ($block_signature eq $Signature_v4){
 		$Gamefile_Version	= '4.00';
-		parseV4();
+		inflateFile();
 	}
 	if ($block_signature eq $Signature_v39){
 		$Gamefile_Version	= '3.90';
-		parseV3();
+		decryptFile();
 	}
 	if ($block_signature eq $Signature_v38){
 		$Gamefile_Version	= '3.80';
-		parseV3();
+		decryptFile();
 	}
 	die 'Unable to determine version' unless defined $Gamefile_Version;
 }
-#Parse a v3.X version file into lines, using PRNG decryption
-sub parseV3(){
+#Decrypt a file using PRNG, for v3.X0
+sub decryptFile(){
 	#Read in encrypted file
-	my $encrypted			= read_file ( $FileName_Bytecode, binmode => ':raw' );
+	my $encrypted			= read_file ( $FileName_Compiled, binmode => ':raw' );
 	#Generate decryption mask
 	my $size				= length($encrypted);
 	my $mask				= '';
 	for my $i (1 .. $size) { $mask .= chr(nextPRNG()) }
 	#Decrypt
 	my $decrypted			= $encrypted ^ $mask;
-	#Split and store lies
+	print $File_Decompiled $decrypted if defined $Option_Rawdump;
+	#Split and store lines
 	@Lines = split(chr(13).chr(10), $decrypted);
 }
-#Parse a v4.0 version file into lines, using zlib deflation
-sub parseV4(){
+#Inflate a file using zlib, for v4.00
+sub inflateFile(){
 	#Read in the compressed file
-	my $compressed			= read_file ( $FileName_Bytecode, binmode => ':raw' );
+	my $compressed			= read_file ( $FileName_Compiled, binmode => ':raw' );
 	#Skip file signature
 	$compressed				= substr($compressed, $Signature_Size + $Signature_Extra);
 	#Initiate inflation stream
@@ -119,13 +131,14 @@ sub parseV4(){
 	my $inflated;
 	my $status;
 	($inflated, $status)	= $stream->inflate($compressed);
-	#Split and store lies
+	print $File_Decompiled $inflated if defined $Option_Rawdump;
+	#Split and store lines
 	@Lines = split(chr(13).chr(10), $inflated);
 }
 
 sub parseHeader(){
 	#Write to log
-	print $File_Log "Decompiler v$Decompiler_Version on $FileName_Bytecode ";
+	print $File_Log "Decompiler v$Decompiler_Version on $FileName_Compiled ";
 
 }
 
@@ -161,28 +174,32 @@ for (;;) {
 		$Option_Minimal		= 1;
 		splice(@ARGV, 0, 1);
 	}
+	elsif($#ARGV >= 0 && $ARGV[0] eq '+r') {		# Rawdump mode
+		$Option_Rawdump		= 1;
+		splice(@ARGV, 0, 1);
+	}
 	else { last }
 }
-$FileName_Bytecode	= $ARGV[0];	# There should be only one argument left, giving the name of the file to parse.
+$FileName_Compiled	= $ARGV[0];	# There should be only one argument left, giving the name of the file to parse.
 die "Use: adrift [options] file.taf\n$Options" if ($#ARGV != 0);	# Too many unparsed arguments
 
 #Determine names to use
 $FileName_Path	= './';	# Default to no directory
 if ($ARGV[0] =~ m/([-_\w\s]*)\.(taf)/i) {	# Use the name of the input file if possible
-	$FileName_Path			= $1 . '/'		unless defined $Option_Minimal;
-	$FileName_Generate		= $1 . '.sym'	if defined $Option_Generate;
-	$FileName_Sourcecode	= $1 . '.src';
 	$FileName_Log			= $1 . '.log';
+	$FileName_Generate		= $1 . '.sym'	if defined $Option_Generate;
+	$FileName_Decompiled	= $1 . '.src'	if defined $Option_Rawdump;
+	$FileName_Path			= $1 . '/'	unless defined $Option_Minimal;
 }
 else{
-	$FileName_Path			= 'decoded/'	unless defined $Option_Minimal;
-	$FileName_Sourcecode	= 'source.src';
 	$FileName_Log			= 'decompile.log';
-	$FileName_Generate		= $1 . '.sym'	if defined $Option_Generate;
+	$FileName_Generate		= 'decompile.sym'	if defined $Option_Generate;
+	$FileName_Decompiled	= 'decompile.src'	if defined $Option_Rawdump;
+	$FileName_Path			= 'decoded/'	unless defined $Option_Minimal;
 }
 
 #Some sanity checking
-die "$FileName_Bytecode is not a valid file"	unless -f $FileName_Bytecode;
+die "$FileName_Compiled is not a valid file"	unless -f $FileName_Compiled;
 die "Overwriting existing symbol file with autogenerated is not supported in minimal mode"
 	if defined $FileName_Generate && $Option_Minimal && -e $FileName_Generate ;
 
@@ -194,26 +211,26 @@ die "$FileName_Path is not a valid path"	unless -d $FileName_Path;
 open($File_Log, "> :raw :bytes :unix", $FileName_Path . $FileName_Log) # Use :unix to flush the log as we write to it
 	or die "$0: can't open $FileName_Path$FileName_Log for writing: $!";
 
-print "Parsing $FileName_Bytecode\n";
-open($File_Bytecode, "< :raw :bytes", $FileName_Bytecode)
-	or die("Couldn't open $FileName_Bytecode for reading.");
+print "Parsing $FileName_Compiled\n";
+open($File_Compiled, "< :raw :bytes", $FileName_Compiled)
+	or die("Couldn't open $FileName_Compiled for reading: $!");
+open($File_Decompiled, "> :raw :bytes", $FileName_Path . $FileName_Decompiled)
+	or die "$0: can't open $FileName_Path$FileName_Decompiled for writing: $!";
+readFile();										# Read the file, determining version from signature
+close($File_Compiled);
+close($File_Decompiled);
 #preloadConstants();							# Populate arrays with constants
-parseSignature();								# Read the file signature to determine version
 parseHeader();									# Read header and determine version/type of file
 #parseFile();									# Parse the input file into the local data structures
-close($File_Bytecode);
 #preloadMapping();								# Load mapping defaults
 #parseMapping() if defined $FileName_Mapping;	# Read symbol file if called for
 print "Analyzing...\n";
 #analyze();
 #generateMapping() if $Option_Generate;			# Generate symbol file if called for
 
-open($File_Sourcecode, "> :raw :bytes", $FileName_Path . $FileName_Sourcecode)
-	or die "$0: can't open $FileName_Path$FileName_Sourcecode for writing: $!";
 print "Writing results...\n";
 #printSource();
 
 #Close file output
-close($File_Sourcecode);
 close($File_Log);
 print "Decompiling completed in ".(time - $Time_Start)." seconds.\n";
