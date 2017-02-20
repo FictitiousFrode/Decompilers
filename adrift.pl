@@ -10,24 +10,29 @@ use Carp;					# For stack tracing at errors
 my $Time_Start	= time();	# Epoch time for start of processing
 
 ##Version History
-my $Decompiler_Version		= '0.4';
+my $Decompiler_Version		= '0.5';
 #v0.1:	Initial structure for flow and storage
 #v0.2:	Signature parsing, inflation/decryption of source
 #v0.3:	Raw dump
 #v0.4:	Parse header
+#v0.5:	Parse rooms, basic XML output
 
 ##Global variables##
 #File handling
 my $FileName_Compiled;		# Filename for the compiled gamefile to decompile
+my $FileName_Path;			# Path to place output files in
+my $FileName_Log;			# Filename for the log
 my $FileName_Mapping;		# Filename for the mapping/translation file, if any.
 my $FileName_Generate;		# Filename for the generated mapping file
-my $FileName_Path;			# Path to place output files in
 my $FileName_Decompiled;	# Filename for the decompiled sourcecode
-my $FileName_Log;			# Filename for the log
+my $FileName_Inform;		# Filename for the Inform output
+my $FileName_XML;			# Filename for the XML output
 my $File_Compiled;			# File handle for input compiled gamefile
+my $File_Log;				# File handle for logging output
 my $File_Mapping;			# File handle for name mapping
 my $File_Decompiled;		# File handle for output decompiled sourcecode
-my $File_Log;				# File handle for logging output
+my $File_Inform;			# File handle for Inform output
+my $File_XML;				# File handle for XML output
 
 #Input
 my @Lines;					# Stores the lines which form the basis of ADRIFT files
@@ -59,14 +64,43 @@ my $Signature_v38	= $Signature_Base.chr(0x94).chr(0x45).chr(0x36).chr(0x61).chr(
 #Game Details
 my $Gamefile_Version;
 my %Game;
-my %Settings;
+my @Rooms 			= ( undef );	# Contains the room objects from the game, starting from ID 1
 ##Translation
 
 #Mappings
+my @Compass_Direction;			# Names of the compass directions, populated by loadCompass
+my @Compass_Reversed;			# Names of the reversed compass directions, populated by loadCompass
 
 #Namings
 
 #Mapping File Handling
+
+sub loadCompass(){
+	$Compass_Direction[0]	= 'North';
+	$Compass_Direction[1]	= 'East';
+	$Compass_Direction[2]	= 'South';
+	$Compass_Direction[3]	= 'West';
+	$Compass_Direction[4]	= 'Up';
+	$Compass_Direction[5]	= 'Down';
+	$Compass_Direction[6]	= 'Inside';
+	$Compass_Direction[7]	= 'Outside';
+	$Compass_Direction[8]	= 'Northeast'		if $Game{ExpandedCompass};
+	$Compass_Direction[9]	= 'Southeast'		if $Game{ExpandedCompass};
+	$Compass_Direction[10]	= 'Southwest'		if $Game{ExpandedCompass};
+	$Compass_Direction[11]	= 'Northwest'		if $Game{ExpandedCompass};
+	$Compass_Reversed[0]	= 'south of';
+	$Compass_Reversed[1]	= 'west of';
+	$Compass_Reversed[2]	= 'north of';
+	$Compass_Reversed[3]	= 'east of';
+	$Compass_Reversed[4]	= 'down from';
+	$Compass_Reversed[5]	= 'up from';
+	$Compass_Reversed[6]	= 'outside from';
+	$Compass_Reversed[7]	= 'inside from';
+	$Compass_Reversed[8]	= 'southwest of'	if $Game{ExpandedCompass};
+	$Compass_Reversed[9]	= 'northwest of'	if $Game{ExpandedCompass};
+	$Compass_Reversed[10]	= 'northeast of'	if $Game{ExpandedCompass};
+	$Compass_Reversed[11]	= 'southeast of'	if $Game{ExpandedCompass};
+}
 
 ##File Handling
 #The next Single-Line Value
@@ -150,15 +184,28 @@ sub inflateFile(){
 	@Lines = split(chr(13).chr(10), $inflated);
 }
 ##Parsing
+sub parseFile(){
+	print $File_Log "Decompiler v$Decompiler_Version on $FileName_Compiled";
+	parseHeader();
+	loadCompass();
+	print $File_Log ", $Game{Title} by $Game{Author} (ADRIFT v$Gamefile_Version)\n";
+	print $File_Log "\tBattles\n"		if $Game{EnableBattle};
+	print $File_Log "\t8-point compass\n"		if $Game{ExpandedCompass};
+	print $File_Log "\tGraphics\n"		if $Game{EnableGraphics};
+	print $File_Log "\tSound\n"			if $Game{EnableSound};
+	my $rooms		= nextSLV();
+	print $File_Log "$rooms rooms\n";
+	for (my $room=1 ; $room<=$rooms ; $room++){ push @Rooms, parseRoom($room); }
+}
 sub parseHeader(){
 	#Intro Text
 	$Game{Intro}			= nextMLV();
 	$Game{Start}			= nextSLV() + 1;	# The only place rooms are indexed from 0
 	$Game{Ending}			= nextMLV();
 	#text	GameName
-	$Game{GameName}			= nextSLV();
+	$Game{Title}			= nextSLV();
 	#text	GameAuthor 
-	$Game{GameAuthor}		= nextSLV();
+	$Game{Author}			= nextSLV();
 	#number	MaxCarried
 	my $max_carried			= nextSLV()	if $Gamefile_Version eq '3.80'; #TODO postprocessing into MaxSize and MaxWeight
 	#text	DontUnderstand 
@@ -243,23 +290,78 @@ sub parseHeader(){
 	$Game{StatusBoxText}	= ''		if $Gamefile_Version eq '3.80' or $Gamefile_Version eq '3.90';
 	$Game{StatusBoxText}	= nextSLV()	if $Gamefile_Version eq '4.00';
 	#2x	Unknown				SKIP
-	nextSLV()							if $Gamefile_Version eq '4.00';
-	nextSLV()							if $Gamefile_Version eq '4.00';
+	nextSLV()							if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	nextSLV()							if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
 	#truth	Embedded
 	$Game{Embedded}			= 0			if $Gamefile_Version eq '3.80' or $Gamefile_Version eq '3.90';
 	$Game{Embedded}			= nextSLV()	if $Gamefile_Version eq '4.00';
-	#Write to log
-	print $File_Log "Decompiler v$Decompiler_Version on $FileName_Compiled, $Game{GameName} by $Game{GameAuthor} (ADRIFT v$Gamefile_Version)\n";
-	print $File_Log "\tBattles\n"		if $Game{EnableBattle};
-	print $File_Log "\tCompass\n"		if $Game{ExpandedCompass};
-	print $File_Log "\tGraphics\n"		if $Game{EnableGraphics};
-	print $File_Log "\tSound\n"			if $Game{EnableSound};
+}
+sub parseRoom($){
+	my $id		= shift;
+	my %room	= ();
+	#text	Short
+	$room{Title}			= nextSLV();
+	print $File_Log "\t\t$id: $room{Title}\n"	if defined $Option_Verbose;
+	#text	Long
+	$room{Description}		= nextSLV();
+	#text	LastDesc
+	$room{LastDesc}			= nextSLV()	if $Gamefile_Version eq '3.80' or $Gamefile_Version eq '3.90';
+	#exit	RoomExits
+	my @exits;
+	my @restrictions;
+	foreach my $dir (0..$#Compass_Direction){
+		my $destination	= nextSLV();
+		if ($destination != 0){
+			$exits[$dir]	= $destination;
+			$restrictions[$dir]{var1}	= nextSLV();
+			$restrictions[$dir]{var2}	= nextSLV();
+			$restrictions[$dir]{var3}	= 0				if $Gamefile_Version eq '3.80' or $Gamefile_Version eq '3.90';
+			$restrictions[$dir]{var3}	= nextSLV()		if $Gamefile_Version eq '4.00';
+		}
+	}
+	$room{Exits}			= \@exits;
+	$room{ExitRestrictions}	= \@restrictions;
+	#text	AddDesc1
+	$room{AltDesc1}			= nextSLV()	if $Gamefile_Version eq '3.80' or $Gamefile_Version eq '3.90';
+	#number	AddDesc1Task
+	$room{AltDesc1Task}		= nextSLV()	if $Gamefile_Version eq '3.80' or $Gamefile_Version eq '3.90';
+	#text	AddDesc2
+	$room{AltDesc2}			= nextSLV()	if $Gamefile_Version eq '3.80' or $Gamefile_Version eq '3.90';
+	#number	AddDesc2Task
+	$room{AltDesc2Task}		= nextSLV()	if $Gamefile_Version eq '3.80' or $Gamefile_Version eq '3.90';
+	#number	Obj
+	$room{AltDesc3Obj}		= nextSLV()	if $Gamefile_Version eq '3.80' or $Gamefile_Version eq '3.90';
+	#text	AltDesc
+	$room{AltDesc3}			= nextSLV()	if $Gamefile_Version eq '3.80' or $Gamefile_Version eq '3.90';
+	#number	TypeHideObjects
+	$room{TypeHideObjects}	= nextSLV()	if $Gamefile_Version eq '3.80' or $Gamefile_Version eq '3.90';
+	#resource	Res
+	$room{Resource}			= parseResource()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	#resource	LastRes
+	$room{LastDescResource}	= parseResource()	if $Gamefile_Version eq '3.90';
+	#resource	Task1Res
+	$room{AltDesc1Resource}	= parseResource()	if $Gamefile_Version eq '3.90';
+	#resource	Task2Res
+	$room{AltDesc2Resource}	= parseResource()	if $Gamefile_Version eq '3.90';
+	#resource	AltRes
+	$room{AltDesc3Resource}	= parseResource()	if $Gamefile_Version eq '3.90';
+	#RoomAlt	Alternates
+	my $alt_count	= 0;
+	my @alternates	= ();
+	$alt_count		= nextSLV()	if $Gamefile_Version eq '4.00';
+	for my $i (1 .. $alt_count){
+		push @alternates, parseRoomAlt();
+	}
+	$room{Alternates}		= \@alternates;
+	#truth	HideOnMap
+	$room{Hidden}		= nextSLV()		if ($Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00') && not $Game{DisableMap};
+	return \%room;
 }
 sub parseBattle(){
 	die 'Fatal error: Battle system is not implemented';
 }
 sub parseResource(){
-	my %resource;
+	my %resource	= ();
 	if($Game{EnableSound}){
 		#text	SoundFile
 		$resource{SoundFile}	= nextSLV();
@@ -276,14 +378,56 @@ sub parseResource(){
 	}
 	return \%resource;
 }
+sub parseRoomAlt(){
+	my %alt				= ();
+	#	$M1 
+	$alt{M1}			= nextSLV();
+	#	#Type 
+	$alt{Type}			= nextSLV();
+	#	<RESOURCE>Res1 
+	$alt{Resource1}		= parseResource();
+	#	$M2
+	$alt{M2}			= nextSLV();
+	#	#Var2 
+	$alt{Var2}			= nextSLV();
+	#	<RESOURCE>Res2 
+	$alt{Resource2}		= parseResource();
+	#	#HideObjects 
+	$alt{HideObjects}	= nextSLV();
+	#	$Changed
+	$alt{Changed}		= nextSLV();
+	#	#Var3 
+	$alt{Var3}			= nextSLV();
+	#	#DisplayRoom
+	$alt{DisplayRoom}	= nextSLV();
+	return \%alt;
+}
 ##Analyzing
 
 ##Output
 sub printSource(){
+	generateXML();			# Generate XML based on bytecode
 	#generateInform();		# Generate equivalent Inform-source
-	#generateXML();			# Generate XML based on bytecode
 }
+#Generate XML Output
+sub generateXML(){
+	print $File_Log "Printing XML File\n";
+	print $File_XML "<story title=\"$Game{Title}\" author=\"$Game{Author}\">\n";
+	generateXMLOptions();
+	generateXMLRooms();
+	print $File_XML "</story>";
+}
+#Generate the options part of the XML output
+sub generateXMLOptions(){
 
+}
+#Generate the rooms part of the XML output
+sub generateXMLRooms(){
+	print $File_XML "<!-- $#Rooms rooms -->\n";
+	for my $room (1 .. $#Rooms){
+		print $File_XML "\t<room id=\"$room\" title=\"$Rooms[$room]{Title}\" />\n";
+	}
+}
 
 ##Main Program Loop
 #Parse command-line arguments
@@ -323,12 +467,16 @@ if ($ARGV[0] =~ m/([-_\w\s]*)\.(taf)/i) {	# Use the name of the input file if po
 	$FileName_Log			= $1 . '.log';
 	$FileName_Generate		= $1 . '.sym'	if defined $Option_Generate;
 	$FileName_Decompiled	= $1 . '.src'	if defined $Option_Rawdump;
+	$FileName_XML			= $1 . '.xml';
+	$FileName_Inform		= $1 . '.ni';
 	$FileName_Path			= $1 . '/'	unless defined $Option_Minimal;
 }
 else{
 	$FileName_Log			= 'decompile.log';
 	$FileName_Generate		= 'decompile.sym'	if defined $Option_Generate;
 	$FileName_Decompiled	= 'decompile.src'	if defined $Option_Rawdump;
+	$FileName_XML			= 'story.xml';
+	$FileName_Inform		= 'story.ni';
 	$FileName_Path			= 'decoded/'	unless defined $Option_Minimal;
 }
 
@@ -349,22 +497,25 @@ print "Parsing $FileName_Compiled\n";
 open($File_Compiled, "< :raw :bytes", $FileName_Compiled)
 	or die("Couldn't open $FileName_Compiled for reading: $!");
 open($File_Decompiled, "> :raw :bytes", $FileName_Path . $FileName_Decompiled)
-	or die "$0: can't open $FileName_Path$FileName_Decompiled for writing: $!";
+	or die "$0: can't open $FileName_Path$FileName_Decompiled for writing: $!"
+	if defined $Option_Rawdump;
 readFile();										# Read the file, determining version from signature
 close($File_Compiled);
-close($File_Decompiled);
+close($File_Decompiled) if defined $Option_Rawdump;
 #preloadConstants();							# Populate arrays with constants
-parseHeader();									# Read header and determine version/type of file
-#parseFile();									# Parse the input file into the local data structures
+print "Analyzing...\n";
+parseFile();									# Parse the input file into the local data structures
 #preloadMapping();								# Load mapping defaults
 #parseMapping() if defined $FileName_Mapping;	# Read symbol file if called for
-print "Analyzing...\n";
-#analyze();
 #generateMapping() if $Option_Generate;			# Generate symbol file if called for
-
 print "Writing results...\n";
-#printSource();
-
+open($File_Inform, "> :raw :bytes", $FileName_Path . $FileName_Inform)
+	or die "$0: can't open $FileName_Path$FileName_Inform for writing: $!";
+open($File_XML, "> :raw :bytes", $FileName_Path . $FileName_XML)
+	or die "$0: can't open $FileName_Path$FileName_XML for writing: $!";
+printSource();
 #Close file output
+close($File_Inform);
+close($File_XML);
 close($File_Log);
 print "Decompiling completed in ".(time - $Time_Start)." seconds.\n";
