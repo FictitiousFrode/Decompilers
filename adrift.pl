@@ -10,12 +10,13 @@ use Carp;					# For stack tracing at errors
 my $Time_Start	= time();	# Epoch time for start of processing
 
 ##Version History
-my $Decompiler_Version		= '0.5';
+my $Decompiler_Version		= '0.6';
 #v0.1:	Initial structure for flow and storage
 #v0.2:	Signature parsing, inflation/decryption of source
 #v0.3:	Raw dump
 #v0.4:	Parse header
-#v0.5:	Parse rooms, basic XML output
+#v0.5:	Parse rooms with basic XML output
+#v0.6:	Parse objects with basic XML output
 
 ##Global variables##
 #File handling
@@ -65,6 +66,7 @@ my $Signature_v38	= $Signature_Base.chr(0x94).chr(0x45).chr(0x36).chr(0x61).chr(
 my $Gamefile_Version;
 my %Game;
 my @Rooms 			= ( undef );	# Contains the room objects from the game, starting from ID 1
+my @Objects 		= ( undef );	# Contains the 'object' objects from the game, starting from ID 1
 ##Translation
 
 #Mappings
@@ -160,7 +162,7 @@ sub decryptFile(){
 	#Generate decryption mask
 	my $size				= length($encrypted);
 	my $mask				= '';
-	for my $i (1 .. $size) { $mask .= chr(nextPRNG()) }
+	for (1 .. $size) { $mask .= chr(nextPRNG()) }
 	#Decrypt
 	my $decrypted			= $encrypted ^ $mask;
 	print $File_Decompiled $decrypted if defined $Option_Rawdump;
@@ -184,6 +186,15 @@ sub inflateFile(){
 	@Lines = split(chr(13).chr(10), $inflated);
 }
 ##Parsing
+#Convert text into uniform naming without spaces or quotes
+sub uniformName($) {
+	my $text	= lc(shift);				# Lower case
+	$text		=~ s/\s+/ /;				# Convert all whitespace to spaces, and trim multiples
+	$text		=~ s/[-_'\"]//g;			# Trim all unwanted characters
+	$text		=~ s/^\s+|\s+$//g;			# Trim leading/trailing whitespace
+	$text		=~ s/ (.)/uc($1)/ge;		# Remove spaces, capitalizing the next letter
+	return $text;
+}
 sub parseFile(){
 	print $File_Log "Decompiler v$Decompiler_Version on $FileName_Compiled";
 	parseHeader();
@@ -196,6 +207,9 @@ sub parseFile(){
 	my $rooms		= nextSLV();
 	print $File_Log "$rooms rooms\n";
 	for (my $room=1 ; $room<=$rooms ; $room++){ push @Rooms, parseRoom($room); }
+	my $objects		= nextSLV();
+	print $File_Log "$objects objects\n";
+	for (my $object=1 ; $object<=$objects ; $object++){ push @Objects, parseObject($object); }
 }
 sub parseHeader(){
 	#Intro Text
@@ -349,13 +363,131 @@ sub parseRoom($){
 	my $alt_count	= 0;
 	my @alternates	= ();
 	$alt_count		= nextSLV()	if $Gamefile_Version eq '4.00';
-	for my $i (1 .. $alt_count){
+	for (1 .. $alt_count){
 		push @alternates, parseRoomAlt();
 	}
 	$room{Alternates}		= \@alternates;
 	#truth	HideOnMap
 	$room{Hidden}		= nextSLV()		if ($Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00') && not $Game{DisableMap};
 	return \%room;
+}
+sub parseObject($){
+	my $id		= shift;
+	my %object	= ();
+	#text	Prefix
+	$object{Prefix}				= nextSLV();
+	#text	Short
+	$object{Short}				= nextSLV();
+	print $File_Log "\t\t$id: ($object{Prefix}) $object{Short}\n"	if defined $Option_Verbose;
+	#text	Alias
+	my $alias_count;
+	$alias_count				= 1			if $Gamefile_Version eq '3.80' or $Gamefile_Version eq '3.90';
+	$alias_count				= nextSLV() if $Gamefile_Version eq '4.00';
+	my $alias;
+	for (1 .. $alias_count){
+		$alias .= ', '		if defined $alias;
+		$alias .= nextSLV();
+	}
+	#truth	Static
+	$object{Static}				= nextSLV();
+	#text	Description
+	$object{Description}		= nextSLV();
+	#number	InitialPosition
+	$object{InitialPosition}	= nextSLV();
+	#number	Task
+	$object{AltDescTask}		= nextSLV();
+	#truth	TaskNotDone
+	$object{AltDescInvert}		= nextSLV();
+	#text	AltDesc
+	$object{AltDesc}			= nextSLV();
+	#RoomList	Where
+	$object{WhereType}			= 9;
+	$object{WhereType}			= nextSLV()	if $object{Static};
+#	0: NO_ROOMS
+#	1: ONE_ROOM
+#	2: SOME_ROOMS
+#	3: ALL_ROOMS
+#	4: NPC_PART
+#	9: NULL/Off-stage
+	$object{Where}				= \[]		unless $object{Static};
+	push @{	$object{Where} }, nextSLV if $object{WhereType} eq 1;
+	if($object{WhereType} eq 2){
+		for my $room (0 .. $#Rooms){
+			push @{	$object{Where} }, $room if nextSLV();
+		}
+	}
+	my $surfaceContainer		= 0;
+	$surfaceContainer			= nextSLV()	if $Gamefile_Version eq '3.80';
+	#truth	Container
+	$object{Container}			= 0			unless $surfaceContainer eq 1;
+	$object{Container}			= 1			if $surfaceContainer eq 1;
+	$object{Container}			= nextSLV()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	#truth	Surface
+	$object{Surface}			= 0			unless $surfaceContainer eq 2;
+	$object{Surface}			= 1			if $surfaceContainer eq 2;
+	$object{Surface}			= nextSLV()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	#number	Capacity
+	$object{Capacity}			= nextSLV();
+	$object{Capacity}			= $object{Capacity} * 10 + 2	if $Gamefile_Version eq '3.80';
+	#truth	Wearable
+	$object{Wearable}			= 0;
+	$object{Wearable}			= nextSLV()	unless $object{Static};
+	#number	SizeWeight
+	$object{SizeWeight}			= 0;
+	$object{SizeWeight}			= nextSLV()	unless $object{Static};
+	#number	Parent
+	$object{Parent}				= 0;
+	$object{Parent}				= nextSLV()	unless $object{Static};
+	$object{Parent}				= nextSLV()	if $object{Static} && $object{WhereType} eq 4;
+	#number	Openable
+	my $openable				= nextSLV();
+#	0: UNOPENABLE
+#	5: OPEN
+#	6: CLOSED
+#	7: LOCKED
+	$object{Openable}			= $openable;
+	#Code 5 and 6 are reversed in v3.XX
+	if($Gamefile_Version eq '3.80' or $Gamefile_Version eq '3.90'){
+		$object{Openable}			= 6 if $openable eq 5;
+		$object{Openable}			= 5 if $openable eq 6;
+	}
+	#number	Key
+	$object{Key}				= nextSLV()	if $Gamefile_Version eq '4.00' && $object{Openable};
+	#number	SitLie
+	$object{EnterableType}		= nextSLV();
+	#truth	Edible
+	$object{Edible}				= nextSLV()	unless $object{Static};
+	#truth	Readable
+	$object{Readable}			= nextSLV();
+	#truth	ReadText
+	$object{ReadText}			= nextSLV()	if $object{Readable};
+	#truth	Weapon
+	$object{Weapon}				= nextSLV()	unless $object{Static};
+	#number	CurrentState
+	$object{CurrentState}		= 0			if $Gamefile_Version eq '3.80' or $Gamefile_Version eq '3.90';
+	$object{CurrentState}		= nextSLV() if $Gamefile_Version eq '4.00';
+	#number	States
+	$object{States}				= 0;
+	$object{States}				= nextSLV()	if $object{CurrentState};
+	#truth	StateListed
+	$object{StateListed}		= 0;
+	$object{StateListed}		= nextSLV()	if $object{CurrentState};
+	#truth	ListFlag
+	$object{ListFlag}			= 0			if $Gamefile_Version eq '3.80' or $Gamefile_Version eq '3.90';
+	$object{ListFlag}			= nextSLV() if $Gamefile_Version eq '4.00';
+	#resource	Res1
+	$object{Resource1}			= parseResource()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	#resource	Res2
+	$object{Resource2}			= parseResource()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	#battle	Battle
+	$object{BattleStats}		= parseBattle()	if $Game{EnableBattle};
+	#text	InRoomDesc
+	$object{InRoomDesc}			= ''		if $Gamefile_Version eq '3.80' or $Gamefile_Version eq '3.90';
+	$object{InRoomDesc}			= nextSLV() if $Gamefile_Version eq '4.00';
+	#number	OnlyWhenNotMoved
+	$object{InRoomDescType}		= 0			if $Gamefile_Version eq '3.80' or $Gamefile_Version eq '3.90';
+	$object{InRoomDescType}		= nextSLV() if $Gamefile_Version eq '4.00';
+	return \%object;
 }
 sub parseBattle(){
 	die 'Fatal error: Battle system is not implemented';
@@ -412,10 +544,11 @@ sub printSource(){
 #Generate XML Output
 sub generateXML(){
 	print $File_Log "Printing XML File\n";
-	print $File_XML "<story title=\"$Game{Title}\" author=\"$Game{Author}\">\n";
+	print $File_XML "<Story title=\"$Game{Title}\" author=\"$Game{Author}\">\n";
 	generateXMLOptions();
 	generateXMLRooms();
-	print $File_XML "</story>";
+	generateXMLObjects();
+	print $File_XML "</Story>";
 }
 #Generate the options part of the XML output
 sub generateXMLOptions(){
@@ -424,9 +557,27 @@ sub generateXMLOptions(){
 #Generate the rooms part of the XML output
 sub generateXMLRooms(){
 	print $File_XML "<!-- $#Rooms rooms -->\n";
+	print $File_XML "\t<Rooms>\n"		if $#Rooms;
 	for my $room (1 .. $#Rooms){
-		print $File_XML "\t<room id=\"$room\" title=\"$Rooms[$room]{Title}\" />\n";
+		print $File_XML "\t\t<Room";
+		print $File_XML "\n\t\t\t".'id'		."\t\t= \"$room\"";
+		print $File_XML "\n\t\t\t".'title'	."\t= \"$Rooms[$room]{Title}\"";
+		print $File_XML " />\n";
 	}
+	print $File_XML "\t</Rooms>\n"		if $#Rooms;
+}
+#Generate the objects part of the XML output
+sub generateXMLObjects(){
+	print $File_XML "<!-- $#Objects objects -->\n";
+	print $File_XML "\t<Objects>\n"		if $#Objects;
+	for my $object (1 .. $#Objects){
+		print $File_XML "\t\t<Object";
+		print $File_XML "\n\t\t\t".'id'		."\t\t= \"$object\"";
+		print $File_XML "\n\t\t\t".'prefix'	."\t= \"$Objects[$object]{Prefix}\"";
+		print $File_XML "\n\t\t\t".'short'	."\t= \"$Objects[$object]{Short}\"";
+		print $File_XML " />\n";
+	}
+	print $File_XML "\t</Objects>\n"	if $#Objects;
 }
 
 ##Main Program Loop
