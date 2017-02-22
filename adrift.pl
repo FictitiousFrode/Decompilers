@@ -10,13 +10,14 @@ use Carp;					# For stack tracing at errors
 my $Time_Start	= time();	# Epoch time for start of processing
 
 ##Version History
-my $Decompiler_Version		= '0.6';
+my $Decompiler_Version		= '0.7';
 #v0.1:	Initial structure for flow and storage
 #v0.2:	Signature parsing, inflation/decryption of source
 #v0.3:	Raw dump
 #v0.4:	Parse header
 #v0.5:	Parse rooms with basic XML output
 #v0.6:	Parse objects with basic XML output
+#v0.7:	Parse tasks
 
 ##Global variables##
 #File handling
@@ -67,6 +68,7 @@ my $Gamefile_Version;
 my %Game;
 my @Rooms 			= ( undef );	# Contains the room objects from the game, starting from ID 1
 my @Objects 		= ( undef );	# Contains the 'object' objects from the game, starting from ID 1
+my @Tasks	 		= ( undef );	# Contains the task objects from the game, starting from ID 1
 ##Translation
 
 #Mappings
@@ -200,16 +202,19 @@ sub parseFile(){
 	parseHeader();
 	loadCompass();
 	print $File_Log ", $Game{Title} by $Game{Author} (ADRIFT v$Gamefile_Version)\n";
-	print $File_Log "\tBattles\n"		if $Game{EnableBattle};
-	print $File_Log "\t8-point compass\n"		if $Game{ExpandedCompass};
-	print $File_Log "\tGraphics\n"		if $Game{EnableGraphics};
-	print $File_Log "\tSound\n"			if $Game{EnableSound};
+	print $File_Log "\tBattles\n"			if $Game{EnableBattle};
+	print $File_Log "\t8-point compass\n"	if $Game{ExpandedCompass};
+	print $File_Log "\tGraphics\n"			if $Game{EnableGraphics};
+	print $File_Log "\tSound\n"				if $Game{EnableSound};
 	my $rooms		= nextSLV();
 	print $File_Log "$rooms rooms\n";
 	for (my $room=1 ; $room<=$rooms ; $room++){ push @Rooms, parseRoom($room); }
 	my $objects		= nextSLV();
 	print $File_Log "$objects objects\n";
 	for (my $object=1 ; $object<=$objects ; $object++){ push @Objects, parseObject($object); }
+	my $tasks		= nextSLV();
+	print $File_Log "$tasks tasks\n";
+	for (my $task=1 ; $task<=$tasks ; $task++){ push @Tasks, parseTask($task); }
 }
 sub parseHeader(){
 	#Intro Text
@@ -412,9 +417,7 @@ sub parseObject($){
 	$object{Where}				= \[]		unless $object{Static};
 	push @{	$object{Where} }, nextSLV if $object{WhereType} eq 1;
 	if($object{WhereType} eq 2){
-		for my $room (0 .. $#Rooms){
-			push @{	$object{Where} }, $room if nextSLV();
-		}
+		for my $room (0 .. $#Rooms){ push @{	$object{Where} }, $room if nextSLV(); }
 	}
 	my $surfaceContainer		= 0;
 	$surfaceContainer			= nextSLV()	if $Gamefile_Version eq '3.80';
@@ -489,6 +492,145 @@ sub parseObject($){
 	$object{InRoomDescType}		= nextSLV() if $Gamefile_Version eq '4.00';
 	return \%object;
 }
+sub parseTask($){
+	my $id		= shift;
+	my %task	= ();
+	#text	Command
+	my $commands				= nextSLV();
+	$commands++					if $Gamefile_Version eq '3.80' or $Gamefile_Version eq '3.90';
+	$task{Commands}				= ();
+	for (1 .. $commands) { push @{ $task{Commands} }, nextSLV(); }
+	print $File_Log "\t\t$id: $task{Commands}[0] ($commands)\n"	if defined $Option_Verbose;
+	#text	CompleteText
+	$task{CompleteText}				= nextSLV();
+	#text	ReverseMessage
+	$task{ReverseMessage}			= nextSLV();
+	#text	RepeatText
+	$task{RepeatText}				= nextSLV();
+	#text	AdditionalMessage
+	$task{AdditionalMessage}		= nextSLV();
+	#number	ShowRoomDesc
+	$task{ShowRoomDesc}				= nextSLV();
+	#Some 3.80 variables
+	if ($Gamefile_Version eq '3.80'){
+		#number	Score
+		$task{Score}				= nextSLV();
+		#number	SingleScore
+		$task{BSingleScore}			= nextSLV();
+		#TaskMove	Movements
+		$task{Movements}			= ();
+		for (1 .. 6) { 
+			my %movement	= ();
+			$movement{Var1}		= nextSLV();
+			$movement{Var2}		= nextSLV();
+			$movement{Var3}		= nextSLV();
+			push @{ $task{Movements} },  \%movement;
+		}
+	}
+	#truth	Repeatable
+	$task{Repeatable}				= nextSLV();
+	#truth	Reversible
+	$task{Reversible}				= nextSLV();
+	#text	ReverseCommand
+	my $commands_reverse			= nextSLV();
+	$commands_reverse++				if $Gamefile_Version eq '3.80' or $Gamefile_Version eq '3.90';
+	print $File_Log "\t\t\t$commands_reverse reversion(s)\n"	if defined $Option_Verbose;
+	$task{CommandsReverse}			= ();
+	for (1 .. $commands_reverse) { push @{ $task{CommandsReverse} }, nextSLV(); }
+	#Some 3.80 variables
+	if ($Gamefile_Version eq '3.80'){
+		#number	WearObj1
+		$task{WearObj1}				= nextSLV();
+		#number	WearObj2
+		$task{WearObj2}				= nextSLV();
+		#number	HoldObj1
+		$task{HoldObj1}				= nextSLV();
+		#number	HoldObj2
+		$task{HoldObj2}				= nextSLV();
+		#number	HoldObj3
+		$task{HoldObj3}				= nextSLV();
+		#number	Obj1
+		$task{Obj1}					= nextSLV();
+		#number	Task
+		$task{Task}					= nextSLV();
+		#truth	TaskNotDone
+		$task{TaskNotDone}			= nextSLV();
+		#text	TaskMsg
+		$task{TaskMsg}				= nextSLV();
+		#text	HoldMsg
+		$task{HoldMsg}				= nextSLV();
+		#text	WearMsg
+		$task{WearMsg}				= nextSLV();
+		#text	CompanyMsg
+		$task{CompanyMsg}			= nextSLV();
+		#truth	NotInSameRoom
+		$task{NotInSameRoom}		= nextSLV();
+		#number	NPC
+		$task{NPC}					= nextSLV();
+		#text	Obj1Msg
+		$task{Obj1Msg}				= nextSLV();
+		#number	Obj1Room
+		$task{Obj1Room}				= nextSLV();
+	}
+	#RoomList	Where
+	$task{WhereType}				= 9;
+	$task{WhereType}				= nextSLV();
+#	0: NO_ROOMS
+#	1: ONE_ROOM
+#	2: SOME_ROOMS
+#	3: ALL_ROOMS
+#	4: NPC_PART
+#	9: NULL/Off-stage
+	$task{Where}					= ();
+	push @{	$task{Where} }, nextSLV if $task{WhereType} eq 1;
+	if($task{WhereType} eq 2){
+		for my $room (1 .. $#Rooms){ push @{ $task{Where} }, $room if nextSLV(); }
+	}
+	#Some 3.80 variables
+	if ($Gamefile_Version eq '3.80'){
+		#truth	KillsPlayer
+		$task{KillsPlayer}			= nextSLV();
+		#truth	HoldingSameRoom
+		$task{HoldingSameRoom}		= nextSLV();
+	}
+#	$Question ?$Question:$Hint1,$Hint2 
+	#text	Question
+	$task{Question}					= nextSLV();
+	#text	Hint1
+	$task{Hint1}					= nextSLV()	if length $task{Question} != 0;
+	#text	Hint2
+	$task{Hint2}					= nextSLV()	if length $task{Question} != 0;
+	#Some 3.80 variables
+	if ($Gamefile_Version eq '3.80'){
+		#number	Obj2
+		$task{Obj2}				= nextSLV();
+		#number	Obj2Var1
+		$task{Obj2Var1}			= nextSLV()	if $task{Obj2};
+		#number	Obj2Var2
+		$task{Obj2Var2}			= nextSLV()	if $task{Obj2};
+		#text	Obj2Msg
+		$task{Obj2Msg}			= nextSLV()	if $task{Obj2};
+		#truth	WinGame
+		$task{WinGame}			= nextSLV();
+	}
+	#Restrictions	Restrictions
+	$task{Restrictions}				= ();
+	my $restrictions				= 0;
+	$restrictions					= nextSLV()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	print $File_Log "\t\t\t$restrictions restriction(s)\n"	if defined $Option_Verbose;
+	for (1 .. $restrictions) { push @{ $task{Restrictions} }, parseRestriction(); }
+	#Actions	Actions
+	$task{Actions}					= ();
+	my $actions						= 0;
+	$actions						= nextSLV()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	print $File_Log "\t\t\t$actions action(s)\n"	if defined $Option_Verbose;
+	for (1 .. $actions) { push @{ $task{Actions} }, parseAction(); }
+	#text	RestrMask
+	$task{RestrMask}				= nextSLV()	if $Gamefile_Version eq '4.00';
+	#resource Res
+	$task{Resource}					= parseResource()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	return \%task;
+}
 sub parseBattle(){
 	die 'Fatal error: Battle system is not implemented';
 }
@@ -533,6 +675,126 @@ sub parseRoomAlt(){
 	#	#DisplayRoom
 	$alt{DisplayRoom}	= nextSLV();
 	return \%alt;
+}
+sub parseRestriction(){
+	my %restriction;
+	#number	Type
+	$restriction{Type}		= nextSLV();
+	if($restriction{Type} eq 0){
+		$restriction{Var1}	= nextSLV();
+		$restriction{Var2}	= nextSLV();
+		$restriction{Var3}	= nextSLV();
+	}
+	if($restriction{Type} eq 1){
+		$restriction{Var1}	= nextSLV();
+		$restriction{Var2}	= nextSLV();
+	}
+	if($restriction{Type} eq 2){
+		$restriction{Var1}	= nextSLV();
+		$restriction{Var2}	= nextSLV();
+	}
+	if($restriction{Type} eq 3){
+		$restriction{Var1}	= nextSLV();
+		$restriction{Var2}	= nextSLV();
+		$restriction{Var3}	= nextSLV();
+	}
+	if($restriction{Type} eq 4){
+		$restriction{Var1}	= nextSLV();
+		$restriction{Var2}	= nextSLV();
+		$restriction{Var3}	= nextSLV();
+		$restriction{Var4}	= 0;
+		$restriction{Var4}	= nextSLV()		if $Gamefile_Version eq '4.00';
+	}
+	$restriction{FailMessage}	= nextSLV();
+	$restriction{Var1}++	if $restriction{Var1} > 0 && $Gamefile_Version eq '3.90';
+	return \%restriction;
+#v4.00	TASK_RESTR
+#	#Type 
+#	?#Type=0:#Var1,#Var2,#Var3 
+#	?#Type=1:#Var1,#Var2 
+#	?#Type=2:#Var1,#Var2
+#	?#Type=3:#Var1,#Var2,#Var3 
+#	?#Type=4:#Var1,#Var2,#Var3,$Var4 
+#	$FailMessage"
+#v3.90	TASK_RESTR
+#	#Type
+#	?#Type=0:#Var1,#Var2,#Var3
+#	?#Type=1:#Var1,#Var2
+#	?#Type=2:#Var1,#Var2
+#	?#Type=3:#Var1,#Var2,#Var3
+#	?#Type=4:#Var1,#Var2,#Var3,EVar4
+#	|V390_TASK_RESTR:Var1>0?#Var1++|
+#	$FailMessage
+}
+sub parseAction(){
+	my %action;
+	#number	Type
+	$action{Type}		= nextSLV();
+	$action{Type}++		if $action{Type} > 4 && $Gamefile_Version eq '3.90';
+	if($action{Type} eq 0){
+		$action{Var1}	= nextSLV();
+		$action{Var2}	= nextSLV();
+		$action{Var3}	= nextSLV();
+	}
+	if($action{Type} eq 1){
+		$action{Var1}	= nextSLV();
+		$action{Var2}	= nextSLV();
+		$action{Var3}	= nextSLV();
+	}
+	if($action{Type} eq 2){
+		$action{Var1}	= nextSLV();
+		$action{Var2}	= nextSLV();
+	}
+	if($action{Type} eq 3){
+		$action{Var1}	= nextSLV();
+		$action{Var2}	= nextSLV();
+		$action{Var3}	= nextSLV();
+		$action{Expr}	= nextSLV()	if $Gamefile_Version eq '4.00';
+		$action{Expr}	= ''		if $Gamefile_Version eq '3.90' && $action{Var2} eq 5;
+		$action{Expr}	= nextSLV()	if $Gamefile_Version eq '3.90' && $action{Var2} != 5;
+		$action{Var5}	= nextSLV()	if $Gamefile_Version eq '4.00';
+		$action{Var5}	= nextSLV()	if $Gamefile_Version eq '3.90' && $action{Var2} eq 5;
+		$action{Var5}	= 0			if $Gamefile_Version eq '3.90' && $action{Var2} != 5;
+	}
+	if($action{Type} eq 4){
+		$action{Var1}	= nextSLV();
+	}
+	if($action{Type} eq 5){
+		$action{Var1}	= nextSLV();
+		$action{Var2}	= nextSLV();
+	}
+	if($action{Type} eq 6){
+		$action{Var1}	= nextSLV();
+		$action{Var2}	= 0			if $Gamefile_Version eq '3.90';
+		$action{Var2}	= nextSLV()	if $Gamefile_Version eq '4.00';
+		$action{Var3}	= 0			if $Gamefile_Version eq '3.90';
+		$action{Var3}	= nextSLV()	if $Gamefile_Version eq '4.00';
+	}
+	if($action{Type} eq 7){
+		$action{Var1}	= nextSLV();
+		$action{Var2}	= nextSLV();
+		$action{Var3}	= nextSLV();
+	}
+	return \%action;
+#v4.00	TASK_ACTION",
+#	#Type
+#	?#Type=0:#Var1,#Var2,#Var3
+#	?#Type=1:#Var1,#Var2,#Var3
+#	?#Type=2:#Var1,#Var2 
+#	?#Type=3:#Var1,#Var2,#Var3,$Expr,#Var5
+#	?#Type=4:#Var1 
+#	?#Type=5:#Var1,#Var2 
+#	?#Type=6:#Var1,#Var2,#Var3
+#	?#Type=7:iVar1,iVar2,iVar3
+#v3.90	TASK_ACTION
+#	#Type |V390_TASK_ACTION:Type>4?#Type++| 
+#	?#Type=0:#Var1,#Var2,#Var3
+#	?#Type=1:#Var1,#Var2,#Var3
+#	?#Type=2:#Var1,#Var2
+#	?#Type=3:#Var1,#Var2,#Var3,|V390_TASK_ACTION:$Expr_#Var5|
+#	?#Type=4:#Var1
+#	?#Type=6:#Var1,ZVar2,ZVar3
+#	?#Type=7:iVar1,iVar2,iVar3
 }
 ##Analyzing
 
