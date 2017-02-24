@@ -10,7 +10,7 @@ use Carp;					# For stack tracing at errors
 my $Time_Start	= time();	# Epoch time for start of processing
 
 ##Version History
-my $Decompiler_Version		= '0.7';
+my $Decompiler_Version		= '0.8';
 #v0.1:	Initial structure for flow and storage
 #v0.2:	Signature parsing, inflation/decryption of source
 #v0.3:	Raw dump
@@ -18,6 +18,8 @@ my $Decompiler_Version		= '0.7';
 #v0.5:	Parse rooms with basic XML output
 #v0.6:	Parse objects with basic XML output
 #v0.7:	Parse tasks
+#v0.8:	Parse events, persons and roomgroups
+
 
 ##Global variables##
 #File handling
@@ -69,6 +71,9 @@ my %Game;
 my @Rooms 			= ( undef );	# Contains the room objects from the game, starting from ID 1
 my @Objects 		= ( undef );	# Contains the 'object' objects from the game, starting from ID 1
 my @Tasks	 		= ( undef );	# Contains the task objects from the game, starting from ID 1
+my @Events	 		= ( undef );	# Contains the event objects from the game, starting from ID 1
+my @Persons	 		= ( undef );	# Contains the person objects from the game, starting from ID 1
+my @Groups	 		= ( undef );	# Contains the room group objects from the game, starting from ID 1
 ##Translation
 
 #Mappings
@@ -208,13 +213,22 @@ sub parseFile(){
 	print $File_Log "\tSound\n"				if $Game{EnableSound};
 	my $rooms		= nextSLV();
 	print $File_Log "$rooms rooms\n";
-	for (my $room=1 ; $room<=$rooms ; $room++){ push @Rooms, parseRoom($room); }
+	for my $room	(1 .. $rooms)	{ push @Rooms, parseRoom($room); }
 	my $objects		= nextSLV();
 	print $File_Log "$objects objects\n";
-	for (my $object=1 ; $object<=$objects ; $object++){ push @Objects, parseObject($object); }
+	for my $object	(1 .. $objects)	{ push @Objects, parseObject($object); }
 	my $tasks		= nextSLV();
 	print $File_Log "$tasks tasks\n";
-	for (my $task=1 ; $task<=$tasks ; $task++){ push @Tasks, parseTask($task); }
+	for my $task	(1 .. $tasks)	{ push @Tasks, parseTask($task); }
+	my $events		= nextSLV();
+	print $File_Log "$events events\n";
+	for my $event	(1 .. $events)	{ push @Events, parseEvent($event); }
+	my $persons		= nextSLV();
+	print $File_Log "$persons persons\n";
+	for my $person	(1 .. $persons)	{ push @Persons, parsePerson($person); }
+	my $groups		= nextSLV();
+	print $File_Log "$groups groups\n";
+	for my $group	(1 .. $groups)	{ push @Groups, parseGroup($group); }
 }
 sub parseHeader(){
 	#Intro Text
@@ -631,6 +645,185 @@ sub parseTask($){
 	$task{Resource}					= parseResource()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
 	return \%task;
 }
+sub parseEvent($){
+	my $id		= shift;
+	my %event	= ();
+	#text	Short
+	$event{Short}				= nextSLV();
+	print $File_Log "\t\t$id: $event{Short}\n"	if defined $Option_Verbose;
+	#number	StarterType
+	$event{StarterType}			= nextSLV();
+	#number	StartTime
+	$event{StartTime}			= nextSLV()	if $event{StarterType} eq 2;
+	#number	EndTime
+	$event{EndTime}				= nextSLV()	if $event{StarterType} eq 2;
+	#number	TaskNum
+	$event{TaskNum}				= nextSLV()	if $event{StarterType} eq 3;
+	#number	RestartType
+	$event{RestartType}			= nextSLV();
+	#truth	TaskFinished
+	$event{TaskFinished}		= nextSLV();
+	#number	Time1
+	$event{Time1}				= nextSLV();
+	#number	Time2
+	$event{Time2}				= nextSLV();
+	#text	StartText
+	$event{StartText}			= nextSLV();
+	#text	LookText
+	$event{LookText}			= nextSLV();
+	#text	FinishText
+	$event{FinishText}			= nextSLV();
+	#RoomList	Where
+	$event{WhereType}			= 9;
+	$event{WhereType}			= nextSLV();
+#	0: NO_ROOMS
+#	1: ONE_ROOM
+#	2: SOME_ROOMS
+#	3: ALL_ROOMS
+#	4: NPC_PART
+#	9: NULL/Off-stage
+	$event{Where}				= ();
+	push @{	$event{Where} }, nextSLV if $event{WhereType} eq 1;
+	if($event{WhereType} eq 2){
+		for my $room (1 .. $#Rooms){ push @{ $event{Where} }, $room if nextSLV(); }
+	}
+	#number	PauseTask
+	$event{PauseTask}			= nextSLV();
+	#truth	PauserCompleted
+	$event{PauserCompleted}		= nextSLV();
+	#number	PrefTime1
+	$event{PrefTime1}			= nextSLV();
+	#text	PrefText1
+	$event{PrefText1}			= nextSLV();
+	#number	ResumeTask
+	$event{ResumeTask}			= nextSLV();
+	#truth	ResumerCompleted
+	$event{ResumerCompleted}	= nextSLV();
+	#number	PrefTime2
+	$event{PrefTime2}			= nextSLV();
+	#text	PrefText2
+	$event{PrefText2}			= nextSLV();
+	#number	Obj2
+	$event{Obj2}				= nextSLV();
+	#number	Obj2Dest
+	$event{Obj2Dest}			= nextSLV();
+	#number	Obj3
+	$event{Obj3}				= nextSLV();
+	#number	Obj3Dest
+	$event{Obj3Dest}			= nextSLV();
+	#number	Obj1
+	$event{Obj1}				= nextSLV();
+	#number	Obj1Dest
+	$event{Obj1Dest}			= nextSLV();
+	#number	TaskAffected
+	$event{TaskAffected}		= nextSLV();
+	#Resources
+	$event{Res1}				= parseResource()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	$event{Res2}				= parseResource()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	$event{Res3}				= parseResource()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	$event{Res4}				= parseResource()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	$event{Res5}				= parseResource()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	return \%event;
+#v4.00
+#	$Short #StarterType 
+#	?#StarterType=2:#StartTime,#EndTime ?#StarterType=3:#TaskNum 
+#	#RestartType BTaskFinished #Time1 #Time2 $StartText $LookText $FinishText 
+#	<ROOM_LIST0>Where #PauseTask
+#	BPauserCompleted #PrefTime1 $PrefText1 #ResumeTask BResumerCompleted
+#	#PrefTime2 $PrefText2 #Obj2 #Obj2Dest #Obj3 #Obj3Dest #Obj1 #Obj1Dest
+#	#TaskAffected [5]<RESOURCE>Res
+#v3.90
+#	$Short #StarterType 
+#	?#StarterType=2:#StartTime,#EndTime ?#StarterType=3:#TaskNum 
+#	#RestartType BTaskFinished #Time1 #Time2 $StartText $LookText $FinishText 
+#	<ROOM_LIST0>Where #PauseTask
+#	BPauserCompleted #PrefTime1 $PrefText1 #ResumeTask BResumerCompleted
+#	#PrefTime2 $PrefText2 #Obj2 #Obj2Dest #Obj3 #Obj3Dest #Obj1 #Obj1Dest
+#	#TaskAffected [5]<RESOURCE>Res
+#v3.80
+#   $Short #StarterType 
+#	?#StarterType=2:#StartTime,#EndTime ?#StarterType=3:#TaskNum 
+#	#RestartType BTaskFinished #Time1 #Time2 $StartText $LookText $FinishText 
+#	<ROOM_LIST0>Where #PauseTask
+#	BPauserCompleted #PrefTime1 $PrefText1 #ResumeTask BResumerCompleted
+#	#PrefTime2 $PrefText2 #Obj2 #Obj2Dest #Obj3 #Obj3Dest #Obj1 #Obj1Dest
+#	#TaskAffected
+}
+sub parsePerson($){
+	my $id		= shift;
+	my %person	= ();
+	#text	Name
+	$person{Name}				= nextSLV();
+	print $File_Log "\t\t$id: $person{Name}\n"	if defined $Option_Verbose;
+	#text	Prefix
+	$person{Prefix}				= nextSLV();
+	#text	Alias
+	my $alias					= 1;
+	$alias						= nextSLV()	if $Gamefile_Version eq '4.00';
+	$person{Alias}				= ();
+	for (1 .. $alias) { push @{ $person{Alias} }, nextSLV(); }
+	#text	Descr
+	$person{Desc}				= nextSLV();
+	#number	StartRoom
+	$person{StartRoom}			= nextSLV();
+	#text	AltText
+	$person{AltDesc}			= nextSLV();
+	#text	Task
+	$person{AltDescTask}		= nextSLV();
+	#text	Topics
+	my $topics					= nextSLV();
+	$person{Topics}				= ();
+	print $File_Log "\t\t\t$topics topics(s)\n"	if defined $Option_Verbose;
+	for (1 .. $topics) { push @{ $person{Topics} }, parseTopic(); }
+	#text	Walks
+	my $walks					= nextSLV();
+	$person{Walks}				= ();
+	print $File_Log "\t\t\t$walks walks(s)\n"	if defined $Option_Verbose;
+	for (1 .. $walks) { push @{ $person{Walks} }, parseWalk(); }
+	#truth	ShowEnterExit
+	$person{ShowEnterExit}		= nextSLV();
+	#text	EnterText
+	$person{EnterText}			= nextSLV()	if $person{ShowEnterExit};
+	#text	ExitText
+	$person{ExitText}			= nextSLV()	if $person{ShowEnterExit};
+	#text	InRoomText
+	$person{InRoomText}			= nextSLV();
+	#number	Gender
+	$person{Gender}	= 0				if $Gamefile_Version eq '3.80';
+	$person{Gender}	= nextSLV()		if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	#Resources
+	$person{Res1}				= parseResource()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	$person{Res2}				= parseResource()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	$person{Res3}				= parseResource()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	$person{Res4}				= parseResource()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	#battle	Battle
+	$person{BattleStats}		= parseBattle()	if $Game{EnableBattle};
+	return \%person;
+#v4.00
+#	$Name $Prefix V$Alias $Descr #StartRoom $AltText #Task V<TOPIC>Topics
+#	V<WALK>Walks BShowEnterExit ?BShowEnterExit:$EnterText,$ExitText
+#	$InRoomText #Gender [4]<RESOURCE>Res ?GBattleSystem:<NPC_BATTLE>Battle
+#v3.90
+#	$Name $Prefix [1]$Alias $Descr #StartRoom $AltText #Task V<TOPIC>Topics
+#	V<WALK>Walks BShowEnterExit ?BShowEnterExit:$EnterText,$ExitText
+#	$InRoomText #Gender [4]<RESOURCE>Res ?GBattleSystem:<NPC_BATTLE>Battle
+#v3.80
+#	$Name $Prefix [1]$Alias $Descr #StartRoom $AltText #Task V<TOPIC>Topics
+#	V<WALK>Walks BShowEnterExit ?BShowEnterExit:$EnterText,$ExitText
+#	$InRoomText ZGender
+}
+sub parseGroup($){
+	my $id		= shift;
+	my %group	= ();
+	#text	Name
+	$group{Name}				= nextSLV();
+	print $File_Log "\t\t$id: $group{Name}\n"	if defined $Option_Verbose;
+	#		Rooms
+	$group{Rooms}				= ();
+	for my $room (1 .. $#Rooms){ push @{ $group{Rooms} }, $room if nextSLV(); }
+	return \%group;
+}
+
 sub parseBattle(){
 	die 'Fatal error: Battle system is not implemented';
 }
@@ -796,6 +989,68 @@ sub parseAction(){
 #	?#Type=6:#Var1,ZVar2,ZVar3
 #	?#Type=7:iVar1,iVar2,iVar3
 }
+sub parseTopic(){
+	my %topic;
+	#text	Subject
+	$topic{Subject}			= nextSLV();
+	#text	Reply
+	$topic{Reply}			= nextSLV();
+	#number	Task
+	$topic{AltReplyTask}	= nextSLV();
+	#text	AltReply
+	$topic{AltReply}		= nextSLV();
+	return \%topic;
+}
+sub parseWalk(){
+	my %walk;
+	#number	NumStops
+	my $stops				= nextSLV();
+	print $File_Log "\t\t\t\t$stops stops(s)\n"	if defined $Option_Verbose;
+	$walk{NumStops}			= $stops;
+	#truth	Loop
+	$walk{Loop}				= nextSLV();
+	#number	StartTask
+	$walk{StartTask}		= nextSLV();
+	#number	CharTask
+	$walk{CharTask		}	= nextSLV();
+	#number	MeetObject
+	$walk{MeetObject}		= nextSLV();
+#TODO: ?!#MeetObject=0:|V380_WALK:_MeetObject_|
+	#number	ObjectTask
+	$walk{ObjectTask}		= nextSLV();
+	#number	StoppingTask
+	$walk{StoppingTask}		= 0			if $Gamefile_Version eq '3.80';
+	$walk{StoppingTask}		= nextSLV()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	#number	MeetChar
+	$walk{MeetChar}			= 0			if $Gamefile_Version eq '3.80' or $Gamefile_Version eq '3.90';
+	$walk{MeetChar}			= nextSLV()	if $Gamefile_Version eq '4.00';
+	#text	ChangedDesc
+	$walk{ChangedDesc}		= ''		if $Gamefile_Version eq '3.80';
+	$walk{ChangedDesc}		= nextSLV()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	#	{WALK:#Rooms_#Times} 
+	$walk{Stops}				= ();
+	for (1 .. $stops){
+		my %stop		= ();
+		$stop{Room}		= nextSLV();
+		$stop{Times}	= nextSLV();
+		push @{ $walk{Stops} }, \%stop;
+	}
+	
+	return \%walk;
+#v4.00	WALK
+#	#NumStops BLoop #StartTask #CharTask #MeetObject
+#	#ObjectTask #StoppingTask #MeetChar $ChangedDesc
+#	{WALK:#Rooms_#Times}
+#v3.90	WALK
+#	#NumStops BLoop #StartTask #CharTask #MeetObject
+#	#ObjectTask #StoppingTask ZMeetChar $ChangedDesc
+#	{WALK:#Rooms_#Times}
+#v3.80	WALK
+#	#NumStops BLoop #StartTask #CharTask #MeetObject
+#	?!#MeetObject=0:|V380_WALK:_MeetObject_|
+#	#ObjectTask ZMeetChar ZStoppingTask EChangedDesc
+#	{WALK:#Rooms_#Times} 
+}
 ##Analyzing
 
 ##Output
@@ -810,6 +1065,8 @@ sub generateXML(){
 	generateXMLOptions();
 	generateXMLRooms();
 	generateXMLObjects();
+	#generateXMLTasks();
+	#generateXMLEvents();
 	print $File_XML "</Story>";
 }
 #Generate the options part of the XML output
