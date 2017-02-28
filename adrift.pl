@@ -19,6 +19,7 @@ my $Decompiler_Version		= '0.8';
 #v0.6:	Parse objects with basic XML output
 #v0.7:	Parse tasks
 #v0.8:	Parse events, persons and roomgroups
+#v0.9:	Parse synonyms, variables and ALRs
 
 
 ##Global variables##
@@ -74,6 +75,9 @@ my @Tasks	 		= ( undef );	# Contains the task objects from the game, starting fr
 my @Events	 		= ( undef );	# Contains the event objects from the game, starting from ID 1
 my @Persons	 		= ( undef );	# Contains the person objects from the game, starting from ID 1
 my @Groups	 		= ( undef );	# Contains the room group objects from the game, starting from ID 1
+my @Synonyms 		= ( undef );	# Contains the synonym objects from the game, starting from ID 1
+my @Variables 		= ( undef );	# Contains the variable objects from the game, starting from ID 1
+my @ALRs 			= ( undef );	# Contains the ALR objects from the game, starting from ID 1
 ##Translation
 
 #Mappings
@@ -229,6 +233,17 @@ sub parseFile(){
 	my $groups		= nextSLV();
 	print $File_Log "$groups groups\n";
 	for my $group	(1 .. $groups)	{ push @Groups, parseGroup($group); }
+	my $synonyms	= nextSLV();
+	print $File_Log "$synonyms synonyms\n";
+	for my $synonym	(1 .. $synonyms)	{ push @Synonyms, parseSynonym($synonym); }
+	my $variables	= 0;
+	$variables		= nextSLV()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	print $File_Log "$variables variables\n";
+	for my $variable	(1 .. $variables)	{ push @Variables, parseVariable($variable); }
+	my $alrs		= 0;
+	$alrs			= nextSLV()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	print $File_Log "$alrs ALRs\n";
+	for my $alr	(1 .. $alrs)	{ push @ALRs, parseALR($alr); }
 }
 sub parseHeader(){
 	#Intro Text
@@ -823,7 +838,39 @@ sub parseGroup($){
 	for my $room (1 .. $#Rooms){ push @{ $group{Rooms} }, $room if nextSLV(); }
 	return \%group;
 }
-
+sub parseSynonym($){
+	my $id		= shift;
+	my %synonym	= ();
+	#text	Original
+	$synonym{Original}				= nextSLV();
+	#text	Replacement
+	$synonym{Replacement}			= nextSLV();
+	print $File_Log "\t\t$id: $synonym{Replacement} -> $synonym{Original}\n"	if defined $Option_Verbose;
+	return \%synonym;
+}
+sub parseVariable($){
+	my $id			= shift;
+	my %variable	= ();
+	#text	Name
+	$variable{Name}				= nextSLV();
+	#number	Type
+	$variable{Type}				= 0			if $Gamefile_Version eq '3.90';
+	$variable{Type}				= nextSLV()	if $Gamefile_Version eq '4.00';
+	#text	Value
+	$variable{Value}			= nextSLV();
+	print $File_Log "\t\t$id: $variable{Name} ($variable{Type}) = $variable{Value}\n"	if defined $Option_Verbose;
+	return \%variable;
+}
+sub parseALR($){
+	my $id		= shift;
+	my %alr	= ();
+	#text	Original
+	$alr{Original}				= nextSLV();
+	#text	Replacement
+	$alr{Replacement}			= nextSLV();
+	print $File_Log "\t\t$id: $alr{Original} -> $alr{Replacement}\n"	if defined $Option_Verbose;
+	return \%alr;
+}
 sub parseBattle(){
 	die 'Fatal error: Battle system is not implemented';
 }
