@@ -8,7 +8,7 @@ use Carp;					# For stack tracing at errors
 my $Time_Start	= time();	# Epoch time for start of processing
 
 ##Version History
-my $Decompiler_Version		= '0.10a';
+my $Decompiler_Version		= '0.10c';
 #v0.1:	Initial structure for flow and storage
 #v0.2:	Parsing of data blocks (Headers + XSI/OBJ/RES)
 #v0.3:	Generation and parsing of symbol file
@@ -20,6 +20,8 @@ my $Decompiler_Version		= '0.10a';
 #v0.9:	Minor tweaks
 #v0.10:	Various bugfixes
 #v0.10a	- payload -> operand
+#v0.10b	Improved branching (while break)
+#v0.10c Escape codes for strings, assignment operator bug, string concatenation
 
 ##Global variables##
 #File handling
@@ -439,89 +441,89 @@ sub preloadMapping() {
 	$Translate_Property_Argument[56] = ['actor', 'prep', 'dobj', 'verprop', 'wordlist', 'objlist', 'flaglist', 'numberWanted', 'isAmbiguous', 'silent'];	# disambigIobj
 	$Translate_Property_Argument[57] = ['show', 'current_index', 'count', 'multi_flags'];	# prefixdesc
 	#Builtin functions
-	$Translate_Builtin[0]	= 'say'; 
-	$Translate_Builtin[1]	= 'car'; 
-	$Translate_Builtin[2]	= 'cdr'; 
-	$Translate_Builtin[3]	= 'length'; 
-	$Translate_Builtin[4]	= 'randomize'; 
-	$Translate_Builtin[5]	= 'rand'; 
-	$Translate_Builtin[6]	= 'substr'; 
-	$Translate_Builtin[7]	= 'cvtstr'; 
-	$Translate_Builtin[8]	= 'cvtnum'; 
-	$Translate_Builtin[9]	= 'upper'; 
-	$Translate_Builtin[10]	= 'lower'; 
-	$Translate_Builtin[11]	= 'caps'; 
-	$Translate_Builtin[12]	= 'find'; 
-	$Translate_Builtin[13]	= 'getarg'; 
-	$Translate_Builtin[14]	= 'datatype'; 
-	$Translate_Builtin[15]	= 'setdaemon'; 
-	$Translate_Builtin[16]	= 'setfuse'; 
-	$Translate_Builtin[17]	= 'setversion'; 
-	$Translate_Builtin[18]	= 'notify'; 
-	$Translate_Builtin[19]	= 'unnotify'; 
-	$Translate_Builtin[20]	= 'yorn'; 
-	$Translate_Builtin[21]	= 'remfuse'; 
-	$Translate_Builtin[22]	= 'remdaemon'; 
-	$Translate_Builtin[23]	= 'incturn'; 
-	$Translate_Builtin[24]	= 'quit'; 
-	$Translate_Builtin[25]	= 'save'; 
-	$Translate_Builtin[26]	= 'restore'; 
-	$Translate_Builtin[27]	= 'logging'; 
-	$Translate_Builtin[28]	= 'input'; 
-	$Translate_Builtin[29]	= 'setit'; 
-	$Translate_Builtin[30]	= 'askfile'; 
-	$Translate_Builtin[31]	= 'setscore'; 
-	$Translate_Builtin[32]	= 'firstobj'; 
-	$Translate_Builtin[33]	= 'nextobj'; 
-	$Translate_Builtin[34]	= 'isclass'; 
+	$Translate_Builtin[0]	= 'say';
+	$Translate_Builtin[1]	= 'car';
+	$Translate_Builtin[2]	= 'cdr';
+	$Translate_Builtin[3]	= 'length';
+	$Translate_Builtin[4]	= 'randomize';
+	$Translate_Builtin[5]	= 'rand';
+	$Translate_Builtin[6]	= 'substr';
+	$Translate_Builtin[7]	= 'cvtstr';
+	$Translate_Builtin[8]	= 'cvtnum';
+	$Translate_Builtin[9]	= 'upper';
+	$Translate_Builtin[10]	= 'lower';
+	$Translate_Builtin[11]	= 'caps';
+	$Translate_Builtin[12]	= 'find';
+	$Translate_Builtin[13]	= 'getarg';
+	$Translate_Builtin[14]	= 'datatype';
+	$Translate_Builtin[15]	= 'setdaemon';
+	$Translate_Builtin[16]	= 'setfuse';
+	$Translate_Builtin[17]	= 'setversion';
+	$Translate_Builtin[18]	= 'notify';
+	$Translate_Builtin[19]	= 'unnotify';
+	$Translate_Builtin[20]	= 'yorn';
+	$Translate_Builtin[21]	= 'remfuse';
+	$Translate_Builtin[22]	= 'remdaemon';
+	$Translate_Builtin[23]	= 'incturn';
+	$Translate_Builtin[24]	= 'quit';
+	$Translate_Builtin[25]	= 'save';
+	$Translate_Builtin[26]	= 'restore';
+	$Translate_Builtin[27]	= 'logging';
+	$Translate_Builtin[28]	= 'input';
+	$Translate_Builtin[29]	= 'setit';
+	$Translate_Builtin[30]	= 'askfile';
+	$Translate_Builtin[31]	= 'setscore';
+	$Translate_Builtin[32]	= 'firstobj';
+	$Translate_Builtin[33]	= 'nextobj';
+	$Translate_Builtin[34]	= 'isclass';
 	$Translate_Builtin[35]	= 'restart';
-	$Translate_Builtin[36]	= 'debugTrace'; 
-	$Translate_Builtin[37]	= 'undo'; 
-	$Translate_Builtin[38]	= 'defined'; 
-	$Translate_Builtin[39]	= 'proptype'; 
-	$Translate_Builtin[40]	= 'outhide'; 
-	$Translate_Builtin[41]	= 'runfuses'; 
-	$Translate_Builtin[42]	= 'rundaemons'; 
-	$Translate_Builtin[43]	= 'gettime'; 
-	$Translate_Builtin[44]	= 'getfuse'; 
-	$Translate_Builtin[45]	= 'intersect'; 
-	$Translate_Builtin[46]	= 'inputkey'; 
-	$Translate_Builtin[47]	= 'objwords'; 
-	$Translate_Builtin[48]	= 'addword'; 
-	$Translate_Builtin[49]	= 'delword'; 
-	$Translate_Builtin[50]	= 'getwords'; 
-	$Translate_Builtin[51]	= 'nocaps'; 
-	$Translate_Builtin[52]	= 'skipturn'; 
-	$Translate_Builtin[53]	= 'clearscreen'; 
-	$Translate_Builtin[54]	= 'firstsc'; 
-	$Translate_Builtin[55]	= 'verbinfo'; 
-	$Translate_Builtin[56]	= 'fopen'; 
-	$Translate_Builtin[57]	= 'fclose'; 
-	$Translate_Builtin[58]	= 'fwrite'; 
-	$Translate_Builtin[59]	= 'fread'; 
-	$Translate_Builtin[60]	= 'fseek'; 
-	$Translate_Builtin[61]	= 'fseekeof'; 
-	$Translate_Builtin[62]	= 'ftell'; 
-	$Translate_Builtin[63]	= 'outcapture'; 
-	$Translate_Builtin[64]	= 'systemInfo'; 
-	$Translate_Builtin[65]	= 'morePrompt'; 
-	$Translate_Builtin[66]	= 'parserSetMe'; 
-	$Translate_Builtin[67]	= 'parserGetMe'; 
-	$Translate_Builtin[68]	= 'reSearch'; 
-	$Translate_Builtin[69]	= 'reGetGroup'; 
-	$Translate_Builtin[70]	= 'inputevent'; 
-	$Translate_Builtin[71]	= 'timeDelay'; 
-	$Translate_Builtin[72]	= 'setOutputFilter'; 
-	$Translate_Builtin[73]	= 'execCommand'; 
-	$Translate_Builtin[74]	= 'parserGetObj'; 
-	$Translate_Builtin[75]	= 'parseNounList'; 
-	$Translate_Builtin[76]	= 'parserTokenize'; 
+	$Translate_Builtin[36]	= 'debugTrace';
+	$Translate_Builtin[37]	= 'undo';
+	$Translate_Builtin[38]	= 'defined';
+	$Translate_Builtin[39]	= 'proptype';
+	$Translate_Builtin[40]	= 'outhide';
+	$Translate_Builtin[41]	= 'runfuses';
+	$Translate_Builtin[42]	= 'rundaemons';
+	$Translate_Builtin[43]	= 'gettime';
+	$Translate_Builtin[44]	= 'getfuse';
+	$Translate_Builtin[45]	= 'intersect';
+	$Translate_Builtin[46]	= 'inputkey';
+	$Translate_Builtin[47]	= 'objwords';
+	$Translate_Builtin[48]	= 'addword';
+	$Translate_Builtin[49]	= 'delword';
+	$Translate_Builtin[50]	= 'getwords';
+	$Translate_Builtin[51]	= 'nocaps';
+	$Translate_Builtin[52]	= 'skipturn';
+	$Translate_Builtin[53]	= 'clearscreen';
+	$Translate_Builtin[54]	= 'firstsc';
+	$Translate_Builtin[55]	= 'verbinfo';
+	$Translate_Builtin[56]	= 'fopen';
+	$Translate_Builtin[57]	= 'fclose';
+	$Translate_Builtin[58]	= 'fwrite';
+	$Translate_Builtin[59]	= 'fread';
+	$Translate_Builtin[60]	= 'fseek';
+	$Translate_Builtin[61]	= 'fseekeof';
+	$Translate_Builtin[62]	= 'ftell';
+	$Translate_Builtin[63]	= 'outcapture';
+	$Translate_Builtin[64]	= 'systemInfo';
+	$Translate_Builtin[65]	= 'morePrompt';
+	$Translate_Builtin[66]	= 'parserSetMe';
+	$Translate_Builtin[67]	= 'parserGetMe';
+	$Translate_Builtin[68]	= 'reSearch';
+	$Translate_Builtin[69]	= 'reGetGroup';
+	$Translate_Builtin[70]	= 'inputevent';
+	$Translate_Builtin[71]	= 'timeDelay';
+	$Translate_Builtin[72]	= 'setOutputFilter';
+	$Translate_Builtin[73]	= 'execCommand';
+	$Translate_Builtin[74]	= 'parserGetObj';
+	$Translate_Builtin[75]	= 'parseNounList';
+	$Translate_Builtin[76]	= 'parserTokenize';
 	$Translate_Builtin[77]	= 'parserGetTokTypes';
-	$Translate_Builtin[78]	= 'parserDictLookup'; 
+	$Translate_Builtin[78]	= 'parserDictLookup';
 	$Translate_Builtin[79]	= 'parserResolveObjects';
-	$Translate_Builtin[80]	= 'parserReplaceCommand'; 
-	$Translate_Builtin[81]	= 'exitobj'; 
-	$Translate_Builtin[82]	= 'inputdialog'; 
+	$Translate_Builtin[80]	= 'parserReplaceCommand';
+	$Translate_Builtin[81]	= 'exitobj';
+	$Translate_Builtin[82]	= 'inputdialog';
 	$Translate_Builtin[83]	= 'resourceExists';
 }
 sub parseMapping() {
@@ -862,29 +864,29 @@ sub parseBlockREQ($) {
 	#Names and arguments for required functions are taken from detads by Daniel Schepler
 	#Also used fio.c (from line 589)
 	my @req_names	= [];
-	$req_names[0]	= 'Me'; 
-	$req_names[1]	= 'takeVerb'; 
-	$req_names[2]	= 'strObj'; 
-	$req_names[3]	= 'numObj'; 
+	$req_names[0]	= 'Me';
+	$req_names[1]	= 'takeVerb';
+	$req_names[2]	= 'strObj';
+	$req_names[3]	= 'numObj';
 	$req_names[4]	= 'pardon';
-	$req_names[5]	= 'againVerb'; 
-	$req_names[6]	= 'init'; 
-	$req_names[7]	= 'preparse'; 
+	$req_names[5]	= 'againVerb';
+	$req_names[6]	= 'init';
+	$req_names[7]	= 'preparse';
 	$req_names[8]	= 'parseError';
-	$req_names[9]	= 'commandPrompt'; 
-	$req_names[10]	= 'parseDisambig'; 
+	$req_names[9]	= 'commandPrompt';
+	$req_names[10]	= 'parseDisambig';
 	$req_names[11]	= 'parseError2';
-	$req_names[12]	= 'parseDefault'; 
-	$req_names[13]	= 'parseAskobj'; 
+	$req_names[12]	= 'parseDefault';
+	$req_names[13]	= 'parseAskobj';
 	$req_names[14]	= 'preparseCmd';
-	$req_names[15]	= 'parseAskobjActor'; 
-	$req_names[16]	= 'parseErrorParam'; 
+	$req_names[15]	= 'parseAskobjActor';
+	$req_names[16]	= 'parseErrorParam';
 	$req_names[17]	= 'commandAfterRead';
-	$req_names[18]	= 'initRestore'; 
-	$req_names[19]	= 'parseUnknownVerb'; 
+	$req_names[18]	= 'initRestore';
+	$req_names[19]	= 'parseUnknownVerb';
 	$req_names[20]	= 'parseNounPhrase';
-	$req_names[21]	= 'postAction'; 
-	$req_names[22]	= 'endCommand'; 
+	$req_names[21]	= 'postAction';
+	$req_names[22]	= 'endCommand';
 	$req_names[23]	= 'preCommand';
 	$req_names[24]	= 'parseAskobjIndirect';
 	$req_names[25]	= 'preparseExt';		# From fio.c
@@ -921,7 +923,7 @@ sub parseBlockREQ($) {
 		unless ($object eq $Null_Value) {
 			print $File_Log	"\t$i:\tObj$object\t($req_names[$i])\n" if $Option_Verbose;
 			print $File_Log	"\t$i:\tObj$object is named $Translate_Object_Name[$object]\n"
-				if defined $Translate_Object_Name[$object] 
+				if defined $Translate_Object_Name[$object]
 					&& $Translate_Object_Name[$object] != $req_names[$i];
 			$Translate_Object_Name[$object]			= $req_names[$i];
 			print $File_Log	"\t$i:\tObj$object has arguments\n"
@@ -989,6 +991,7 @@ sub parseBlockVOC($) {
 			my $data	= decrypt(substr($block, $pos + 10, $size1+$size2));
 			my $text	= substr($data, 0, $size1);
 			$text		.= ' '.substr($data, $size1, $size2) if ($size2 > 0);
+			$text		= cleanText($text);
 			# Store in object's vocabulary list
 			die "Vocabulary for undefined Object: Obj$obj_id"	unless defined $Objects[$obj_id];
 			$Objects[$obj_id]{vocabulary}			= {}		unless $Objects[$obj_id]{vocabulary};
@@ -1274,7 +1277,7 @@ sub analyzeVocabulary() {
 		}
 		#No naming alternatives available
 		next unless defined $name;
-		
+
 		my $rename;
 		$Translate_Object_Name[$obj]	= $name unless defined $Translate_Object_Name[$obj];
 		$rename							= 1		unless $name eq $Translate_Object_Name[$obj];
@@ -1295,7 +1298,7 @@ sub analyzeFunctionCode() {
 			print $File_Log "\tObj$obj\tCode already analyzed\n";
 			warn "$obj: Code already analyzed";
 			return;
-		}	
+		}
 		print $File_Log "\tObj$obj:\n"	if $Option_Verbose;
 		$Objects[$obj]{instructions}	= analyzeCodeblock(-$obj, $codeblock);	# Note the negative ID for object function code
 	}
@@ -1569,7 +1572,7 @@ sub analyzeOpcode($$$) {
 		}
 		elsif (($opcode & 0x03) eq 0x01){
 			#Object ID embedded as INT16
-			my $value	= nameObject(unpack('s', substr($codeblock, $pos + $size, 2)));
+			my $value	= nameProperty(unpack('s', substr($codeblock, $pos + $size, 2)));
 			$size+=2;
 			push @operand, $value;
 		}
@@ -1625,8 +1628,8 @@ sub bestVocabularyToken($$;$) {
 #Convert text into uniform naming without spaces or quotes
 sub uniformName($) {
 	my $text	= lc(shift);				# Lower case
-	$text		=~ s/\s+/ /;				# Convert all whitespace to spaces, and trim multiples
-	$text		=~ s/[-_'\"]//g;				# Trim all unwanted characters
+	$text		=~ s/[-_'\"\/\\]//g;		# Trim all unwanted characters
+	$text		=~ s/\s+/ /g;				# Convert all whitespace to spaces, and trim multiples
 	$text		=~ s/^\s+|\s+$//g;			# Trim leading/trailing whitespace
 	$text		=~ s/ (.)/uc($1)/ge;		# Remove spaces, capitalizing the next letter
 	return $text;
@@ -1661,6 +1664,16 @@ sub arrayString($;$) {
 	}
 	return $text;
 }
+#Cleans a text-string, setting escapes for quotes.
+sub cleanText($) {
+	my $text	= shift;
+	croak "Can't clean without text"	unless defined $text;
+	$text	=~ s/[\/]/\/\//g;	#Fore-slash
+	$text	=~ s/[']/\\'/g;		#Single-quote
+	$text	=~ s/["]/\\"/g;		#Double-quote
+	$text	=~ s/<</\\<<'/g;	#Embedded expression safety
+	return $text;
+}
 #Decode a property given it's type; lists need to be interpreted recursively
 sub decodeProperty($$);
 sub decodeProperty($$) {
@@ -1681,8 +1694,8 @@ sub decodeProperty($$) {
 	my $text	= $Constant_Property_Type[$type];
 	if ($text eq 'number')		{ $text	= unpack('l', $data) }							# 1
 	if ($text eq 'object')		{ $text	= nameObject(unpack('S', $data)) }				# 2
-	if ($text eq 's-string')	{ $text	= "'".substr($data, 2)."'" }					# 3
-	if ($text eq 'd-string')	{ $text	= '"'.substr($data, 2).'"' }					# 9
+	if ($text eq 's-string')	{ $text	= "'".cleanText(substr($data, 2))."'" }					# 3
+	if ($text eq 'd-string')	{ $text	= '"'.cleanText(substr($data, 2)).'"' }					# 9
 	if ($text eq 'fnaddr')		{ $text	= '&'.nameObject(unpack('S', $data)) }			# 10
 	if ($text eq 'property')	{ $text	= nameProperty(unpack('S', $data)) }			# 13
 	#Lists (7) require some special handling, as they are recursive
@@ -1766,7 +1779,7 @@ sub printSource() {
 		printObjectSource($obj)		if ($type eq 2);	# Meta-Objects
 	}
 }
-#Generate and print the source for a meta-object 
+#Generate and print the source for a meta-object
 sub printObjectSource($) {
 	my $obj	= shift;
 	#Object header
@@ -1818,7 +1831,7 @@ sub printObjectSource($) {
 				my $action_type		= substr(nameProperty($prop), 0, 2);
 				if (defined $Property_Actions{$prop} && defined $Property_Actions{$property_target}){
 					my $action_target	= nameAction($Property_Actions{$property_target});
-					my $action_this		= nameAction($Property_Actions{$prop});				
+					my $action_this		= nameAction($Property_Actions{$prop});
 					undef $action_type	unless $action_type eq 'do' || $action_type eq 'io';
 					print $File_Sourcecode "\t" . $action_type . "Synonym('$action_target')\t= '$action_this'\n" if $action_type;
 				}
@@ -1861,17 +1874,17 @@ sub printObjectSource($) {
 				my $value	= propertyString($obj, $prop);
 				print $File_Sourcecode "\t$name\t= $value\n";
 			}
-			
+
 		}
 	}
 }
 sub printInstructions($){
-	my $id	= shift;	
+	my $id	= shift;
 	my $ref	= shift;
 	#Virtual Machine Simulation
 	my @instructions	= @{ $ref };
 	my @stack			= ();	# The current stack
-	my @lines			= ();	# The lines so far 
+	my @lines			= ();	# The lines so far
 	my @branching		= ();	# Keeping track of code branching
 	my @labels			= ();	# Which positions need a label statement
 	my $label			= 0;	# The code position where text was last pushed
@@ -1886,7 +1899,7 @@ sub printInstructions($){
 	#function header
 	my $function_arguments	= 0;
 	my $function_locals		= 0;
-	push @branching, { 
+	push @branching, {
 		type	=> 'MAIN',
 		start	=> 0,
 		end		=> $instructions[$#instructions]{pos}
@@ -1897,7 +1910,7 @@ sub printInstructions($){
 		my $pos				= $instructions[$instruction]{pos};
 		my $next_label		= $instructions[$instruction]{size} + $pos;
 		my @operand			= @{ $instructions[$instruction]{operand} };
-		# Should label be updted to next label?
+		# Should label be updated to next label?
 		my $update_label	= 0;
 		my $label_updated	= 0;
 		#Flag for fatal error in parsing
@@ -2224,7 +2237,7 @@ sub printInstructions($){
 				my $property		= 'nil';
 				my $property_ref	= pop @stack;
 				$property			= %{ $property_ref }{value}	if defined $property_ref;
-				$property			= "($property)";	# Always need paranthesis 
+				$property			= "($property)";	# Always need paranthesis
 				my $object			= 'nil';
 				my $object_prec		= 14;
 				my $object_ref		= pop @stack;
@@ -2287,7 +2300,8 @@ sub printInstructions($){
 			#Type of builtin is encoded in operand
 			my $type 			= shift @operand;
 			unless ($type eq $Translate_Builtin[0] && $argument_count eq 2){
-				#Say (type0) with 2 arguments is a special case
+				#Say (type0) with 2 arguments is a special case, handled below.
+				#Otherwise push the called builtin function to the stack, with corresponding arguments.
 				my $arguments	= '(';
 				for (my $i=0 ; $i<$argument_count ; $i++) {
 					$arguments		.= ', '		if $i > 0;
@@ -2304,32 +2318,23 @@ sub printInstructions($){
 				};
 			}
 			else{
-				#Say (type0) with 2 arguments is inline text substitution: "<< expr >"
-				#The first arugment is the expression, second argument should be nil
+				#Say (type0) with 2 arguments is inline text substitution: "<< expr >>"
+				#The first arugment is the expression, second argument is usually nil but can also be the object to call the expression on
 				my $expr_ref	= pop @stack;
 				my $expr		= 'nil';
-				$expr			= %{ $expr_ref }{value}		if defined $expr_ref;
-				my $discard_ref	= pop @stack;
-				my $discard		= 'nil';
-				$discard		= %{ $discard_ref }{value}	if defined $discard_ref;
-				#Build and combine 
-#DEPRECATED: This was good for aesthetics, but ruined GOTOs to the middle of the text.
-#				if ( defined $lines[$#lines] && substr($lines[$#lines]{text}, - 2) eq '";') {
-#					# If previous printed line was a say expression, we can combine them
-#					$lines[$#lines]{text}	= substr($lines[$#lines]{text}, 0, -2)
-#											. "<< $expr >>\";";
-#					$lines[$#lines]{label}	= $label;
-#				}
-#				else {
+				$expr			= %{ $expr_ref }{value}	if defined $expr_ref;
+				my $call_ref	= pop @stack;
+				my $call		= 'nil';
+				$call			= %{ $call_ref }{value}	if defined $call_ref;
+				#Build and combine
+				my $line	= "\"<< $expr >>\";";
+				$line		= "\"<< $call.$expr >>\";"	unless $call eq 'nil';
 				push @lines, {
-					text	=> "\"<< $expr >>\";",
+					text	=> $line,
 					label	=> $label,
 					indent	=> $#branching
 				};
-#				}
 				$update_label++;
-				#Log warning if we discarded something (TODO: Improved header handling)
-				print $File_Log "BUILTIN SAY discarded $discard\n" unless $discard eq 'nil';
 			}
 		}
 		#Utility
@@ -2348,23 +2353,11 @@ sub printInstructions($){
 		}
 		elsif	($opcode eq 0x1D) {	# OPCSAY			29
 			my $text	= shift @operand;
-			#See if we can append to previous line
-#DEPRECATED: This was good for aesthetics, but ruined GOTOs to the middle of the text.
-#			if ( defined $lines[$#lines] && substr($lines[$#lines]{text}, -4) eq '>>";') {
-#				#>> indicated that the the current line ends in an inline text substitution, so we continue that line
-#				$lines[$#lines]{text}	= substr($lines[$#lines]{text}, 0, -2)	# Trim the trailing ;"
-#										. substr($text, 1)	# Trim the leading ", keeping the trailing "
-#										. ";";
-#				$lines[$#lines]{label}	= $pos;
-#			}
-			#Push a new line
-#			else {
 			push @lines, {
 				text	=> $text.';',
 				label	=> $label,
 				indent	=> $#branching
 			};
-#			}
 			$update_label++;
 		}
 		elsif	($opcode eq 0x4A) {	# OPCCONS			74
@@ -2434,9 +2427,9 @@ sub printInstructions($){
 		}
 		elsif	($opcode eq 0x1A) {	# OPCJMP			26
 			#Unconditional jump, can be used in different branching structures:
-			#	WHILE	End		If destination is the start of WHILE branch
-			#			Break	If destination is the end of first WHILE branch
-			#	SWITCH	Break	If destination is the end of first SWITCH branch
+			#	WHILE	END		If destination is the start of WHILE branch
+			#			BREAK	If destination is the end of first WHILE branch
+			#	SWITCH	BREAK	If destination is the end of first SWITCH branch
 			#	ELSIF	ELSE	If destination is the end of current ELSIF branch
 			#	GOTO			Otherwise
 			#Get destination from operand
@@ -2448,23 +2441,29 @@ sub printInstructions($){
 			my $switch_end;		# End of the first switch statement, if relevant
 			my $switch_level;
 			for (my $i=$#branching ; $i>=0 ; $i--){
-				$switch_end			= $branching[$i]{end} if $branching[$i]{type} eq 'SWITCH';
-				$switch_level		= $i;
+				if ($branching[$i]{type} eq 'SWITCH'){
+					$switch_end			= $branching[$i]{end};
+					$switch_level		= $i;
+					last;
+				}
 			}
 			my $while_end;		#End of the first while statement, if relevant
 			my $while_level;
 			for (my $i=$#branching ; $i>=0 ; $i--){
-				$while_end			= $branching[$i]{end} if $branching[$i]{type} eq 'WHILE';
-				$while_level		= $i;
+				if ($branching[$i]{type} eq 'WHILE'){
+					$while_end			= $branching[$i]{end};
+					$while_level		= $i;
+					last;
+				}
 			}
 			#Only keep the topmost of the two
 			undef $while_end		if defined $while_end && defined $switch_end && ($switch_end > $while_end);
 			undef $switch_end		if defined $while_end && defined $switch_end && ($while_end > $switch_end);
 			#Determine the corresponding branching construct
 			if	  ($branch_type eq 'WHILE' && $branch_start eq $destination && $branch_end eq $next_label){
-				#WHILE	Jump back to start of conditional jump
+				#WHILE-END	Jump back to start of conditional jump
 				#End branch and close brackets
-				print $File_Log "\t\tWHILE-end at $pos/$label to $destination $branch_type($branch_start-$branch_end)\n"	if $Option_Verbose;
+				print $File_Log "\t\tWHILE-END at $pos/$label to $destination $branch_type($branch_start-$branch_end)\n"	if $Option_Verbose;
 				pop @branching;
 				push @lines, {
 					text	=> '}',
@@ -2473,9 +2472,9 @@ sub printInstructions($){
 				};
 			}
 			elsif (defined $while_end && $while_end eq $destination){
-				#WHILE	Jump to end of first while in stack
+				#WHILE-BREAK	Jump to end of first while in stack
 				#Write a break
-				print $File_Log "\t\tWHILE-break at $pos/$label to $destination $branch_type($branch_start-$branch_end)\n"	if $Option_Verbose;
+				print $File_Log "\t\tWHILE-BREAK at $pos/$label to $destination $branch_type($branch_start-$branch_end)\n"	if $Option_Verbose;
 				push @lines, {
 					text	=> 'break;',
 					label	=> $label,
@@ -2614,7 +2613,7 @@ sub printInstructions($){
 		}
 #		elsif	($opcode eq 0x3B) {	# OPCJT				59
 			#Conditional jump, can indicate different branching structures:
-			#	
+			#
 #		}
 		elsif	($opcode eq 0x44	# OPCJST			68
 			||	 $opcode eq 0x45	# OPCJSF			69
@@ -2893,14 +2892,33 @@ sub printInstructions($){
 		print $File_Sourcecode "//\t\t$stack[$i]{value}\n";
 	}
 	#Print lines
-    for my $i (0 .. $#lines) {
+	for (my $line=0 ; $line<$#lines ; $line++){
+		my $text;
+		my $indent	= $lines[$line]{indent};
 		#Print label if needed
-		print $File_Sourcecode "label$lines[$i]{label}:\n" 	if defined $lines[$i]{print_label};
-		#Find the text
-		my $text	= $lines[$i]{text};
-		next unless defined $text;	# Returns sometimes don't leave a line
+		print $File_Sourcecode "label$lines[$line]{label}:\n" 	if defined $lines[$line]{print_label};
+		#Concatenate subsequent string outputs
+		if ($lines[$line]{text} =~ m/^"(.*)";$/m){
+			$text	= '"' . $1;
+			my $nextline = $line +1;
+			#Ensure are no intervening labels and everything is on the same indentation
+			while($nextline < $#lines && $lines[$nextline]{indent} eq $indent && not $lines[$nextline]{print_label}){
+				if ($lines[$nextline]{text} =~ m/^"(.*)";$/m){
+					$text	.= $1;
+					$nextline++;
+				}
+				else {	last; }
+			}
+			$text	.= '";';
+			#Skip ahead; subtract 1 for the for-loop increment
+			$line = $nextline - 1;
+		}
+		else {
+			#All other output is printed as is
+			$text	= $lines[$line]{text};
+			next unless defined $text;	# Returns sometimes don't leave a line
+		}
 		#Indent properly before writing text
-		my $indent	= $lines[$i]{indent};
 		for my $t (0 .. $indent) { print $File_Sourcecode "\t"; }
 		print $File_Sourcecode "\t"			if $mode_prop;
 		print $File_Sourcecode "$text\n";
