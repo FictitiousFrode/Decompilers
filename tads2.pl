@@ -8,7 +8,7 @@ use Carp;					# For stack tracing at errors
 my $Time_Start	= time();	# Epoch time for start of processing
 
 ##Version History
-my $Decompiler_Version		= '0.10c';
+my $Decompiler_Version		= '0.10d';
 #v0.1:	Initial structure for flow and storage
 #v0.2:	Parsing of data blocks (Headers + XSI/OBJ/RES)
 #v0.3:	Generation and parsing of symbol file
@@ -22,6 +22,7 @@ my $Decompiler_Version		= '0.10c';
 #v0.10a	- payload -> operand
 #v0.10b	Improved branching (while break)
 #v0.10c Escape codes for strings, assignment operator bug, string concatenation
+#v0.10d Bugfix for unencrypted files; addes support for OPCLINE
 
 ##Global variables##
 #File handling
@@ -252,7 +253,7 @@ sub preloadConstants() {
 	$Constant_Opcode_Operand[0x4B]	= ['SWITCH'];						# 75	OPCSWITCH
 	$Constant_Opcode_Operand[0x4C]	= ['NONE'];							# 76	OPCARGC
 	$Constant_Opcode_Operand[0x4D]	= ['UINT8'];						# 77	OPCCHKARGC
-	$Constant_Opcode_Operand[0x4E]	= ['UNKNOWN'];						# 78	OPCLINE
+	$Constant_Opcode_Operand[0x4E]	= ['INT32', 'OBJECT', 'UINT16'];	# 78	OPCLINE			Experimental
 	$Constant_Opcode_Operand[0x4F]	= ['FRAME'];						# 79	OPCFRAME
 	$Constant_Opcode_Operand[0x50]	= ['UNKNOWN'];						# 80	OPCBP
 	$Constant_Opcode_Operand[0x51]	= ['UNKNOWN'];						# 81	OPCGETDBLCL
@@ -618,8 +619,8 @@ sub generateMapping() {
 ##File Handling
 #Decrypts the block of text passed in
 sub decrypt($) {
-	return unless $Flags_Encrypted;
 	my $block	= shift;
+	return $block unless $Flags_Encrypted;
 	my $size	= length($block);
 	my $mask	= $Encryption_Seed;
 	my $block_mask;
@@ -748,7 +749,7 @@ sub parseBlockOBJ($) {
 		#Object Header:
 		# 0		Object type
 		# 1-2	Object ID (UINT16)
-		# 3-4	Unknown (often the same as size)
+		# 3-4	Unknown (often the same as size)	Object header size?
 		# 5-6	Size (UINT16)
 		my $type			= unpack('C', substr($block, $pos, 1));
 		my $id				= unpack('S', substr($block, $pos + 1, 2));
@@ -790,13 +791,14 @@ sub parseBlockOBJ($) {
 			}
 			#Parse properties
 			my %property	= ();
-			my $pos_data	= 14 + 2 * $superclasses;				# Skip past header and super classes
+			my $pos_data	= 14 + 2 * $superclasses;			# Skip past header and super classes
 			$pos_data 		+= 2 * $properties if $flags & 2;	# Skip past property index if needed
 			for (my $i=0 ; $i<$properties ; $i++) {
 				#Parse property header
 				my $prop_id			= unpack('S',	substr($data, $pos_data + 0, 2));
 				my $prop_type		= ord	(		substr($data, $pos_data + 2));
 				my $prop_size		= unpack('S',	substr($data, $pos_data + 3, 2));
+				#Flags: 1->Original, 2->Ignore (modified), 4->Deleted Permanently
 				my $prop_flag		= ord	(		substr($data, $pos_data + 5));
 				my $prop_data		= 				substr($data, $pos_data + 6, $prop_size);
 				#Store the relevant data
@@ -1516,7 +1518,7 @@ sub analyzeOpcode($$$) {
 				my $list_length	= unpack('S', substr($codeblock, $pos + $size, 2));
 				#Code for handling junk code that's interpreted as OPCPUSHLST (0x20)
 				my $value	= '[UNKNOWN-LIST]';
-				$value		= decodeProperty(7, substr($codeblock, $pos + $size, $list_length))	if ($pos + $size + $list_length) < $length;
+				$value		= decodeProperty(7, substr($codeblock, $pos + $size, $list_length))	if defined $list_length && ($pos + $size + $list_length) < $length;
 				$size+=$list_length if defined $list_length;
 				push @operand, $value;
 			}
@@ -1668,7 +1670,7 @@ sub arrayString($;$) {
 sub cleanText($) {
 	my $text	= shift;
 	croak "Can't clean without text"	unless defined $text;
-	$text	=~ s/[\/]/\/\//g;	#Fore-slash
+#	$text	=~ s/[\\]/\\\\/g;	#Fore-slash
 	$text	=~ s/[']/\\'/g;		#Single-quote
 	$text	=~ s/["]/\\"/g;		#Double-quote
 	$text	=~ s/<</\\<<'/g;	#Embedded expression safety
@@ -2052,7 +2054,8 @@ sub printInstructions($){
 			$branching[0]{start}	= $next_label;
 			$update_label++;
 		}
-		elsif	($opcode eq 0x4F) {	# OPCFRAME			79
+		elsif	($opcode eq 0x4E	# OPCLINE			78
+			||	 $opcode eq 0x4F) {	# OPCFRAME			79
 			#Ignored
 			$branching[0]{start}	= $next_label;
 			$update_label++;
@@ -2892,13 +2895,13 @@ sub printInstructions($){
 		print $File_Sourcecode "//\t\t$stack[$i]{value}\n";
 	}
 	#Print lines
-	for (my $line=0 ; $line<$#lines ; $line++){
+	for (my $line=0 ; $line<=$#lines ; $line++){
 		my $text;
 		my $indent	= $lines[$line]{indent};
 		#Print label if needed
 		print $File_Sourcecode "label$lines[$line]{label}:\n" 	if defined $lines[$line]{print_label};
 		#Concatenate subsequent string outputs
-		if ($lines[$line]{text} =~ m/^"(.*)";$/m){
+		if (defined $lines[$line]{text} && $lines[$line]{text} =~ m/^"(.*)";$/m){
 			$text	= '"' . $1;
 			my $nextline = $line +1;
 			#Ensure are no intervening labels and everything is on the same indentation
@@ -2952,7 +2955,7 @@ for (;;) {
 	else { last }
 }
 $FileName_Bytecode	= $ARGV[0];	# There should be only one argument left, giving the name of the file to parse.
-die "Use: tads2 [options] file.taf\n$Options" if ($#ARGV != 0);	# Too many unparsed arguments
+die "Use: tads2 [options] file.gam\n$Options" if ($#ARGV != 0);	# Too many unparsed arguments
 
 #Determine names to use
 $FileName_Path	= './';	# Default to no directory
