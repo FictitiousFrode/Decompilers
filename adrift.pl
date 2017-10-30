@@ -10,7 +10,7 @@ use Carp;					# For stack tracing at errors
 my $Time_Start	= time();	# Epoch time for start of processing
 
 ##Version History
-my $Decompiler_Version		= '0.10.0';
+my $Decompiler_Version		= '0.11';
 #v0.1:	Initial structure for flow and storage
 #v0.2:	Signature parsing, inflation/decryption of source
 #v0.3:	Raw dump
@@ -21,6 +21,7 @@ my $Decompiler_Version		= '0.10.0';
 #v0.8:	Parse events, persons and roomgroups
 #v0.9:	Parse synonyms, variables and ALRs
 #v0.10: Improved output to XML and Inform
+#v0.11:	Improved parsing of actions and restrictions
 
 
 ##Global variables##
@@ -80,21 +81,32 @@ my @Groups	 		= ( undef );	# Contains the room group objects from the game, star
 my @Synonyms 		= ( undef );	# Contains the synonym objects from the game, starting from ID 1
 my @Variables 		= ( undef );	# Contains the variable objects from the game, starting from ID 1
 my @ALRs 			= ( undef );	# Contains the ALR objects from the game, starting from ID 1
+#Relationships
+my @RoomTasks		= ();
+my @ObjectTasks		= ();
+my @TaskPersons		= ();
+my @TaskGroups		= ();
+my @TaskVariables	= ();
+
 ##Translation
 #Translation Mappings
-my @Translate_Room;					# Object names for rooms
-my @Translate_Object;				# Object names for 'objects'
-my @Translate_Task;					# Object names for tasks
-my @Translate_Person;				# Object names for persons
-my @Translate_Variable;				# Object names for variables
-#Object mappings
-my @ObjectStatic	= ( undef );	# Mapping from static object ID to actual object ID
-my @ObjectPortable	= ( undef );	# Mapping from non-static object ID to actual object ID
-my @ObjectOpenable	= ();			# Mapping from openable object ID to actual object ID; Starts at 0.
-my @ObjectContainer	= ();			# Mapping from container object ID to actual object ID; Starts at 0.
-my @ObjectSurface	= ();			# Mapping from surface object ID to actual object ID; Starts at 0.
-my @ObjectHolder	= ();			# Mapping from holder/parent object ID to actual object ID; Starts at 0.
-#Constants
+my @Translate_Room;					# Translation names for rooms
+my @Translate_Object;				# Translation names for 'objects'
+my @Translate_Task;					# Translation names for tasks
+my @Translate_Event;				# Translation names for event
+my @Translate_Person;				# Translation names for persons
+my @Translate_Group;				# Translation names for room groups
+my @Translate_Variable;				# Translation names for variables
+#Object mappings - VERIFY if some of these start at 0
+my @ObjectStatic		= ( 0 );	# Mapping from static object ID to actual object ID
+my @ObjectPortable		= ( 0 );	# Mapping from non-static object ID to actual object ID
+my @ObjectOpenable		= ( 0 );	# Mapping from openable object ID to actual object ID; VERIFY Starts at 0.
+my @ObjectContainer		= ( 0 );	# Mapping from container object ID to actual object ID; VERIFY Starts at 0 
+my @ObjectSurface		= ( 0 );	# Mapping from surface object ID to actual object ID; VERIFY Starts at 0.
+my @ObjectHolder		= ( 0 );	# Mapping from holder/parent object ID to actual object ID; VERIFY Starts at 0.
+my @ObjectLieable		= ( 0 );	# Mapping from lieable object ID to actual object ID
+my @ObjectSitStandable	= ( 0 );	# Mapping from sit/standable object ID to actual object ID
+#Static mappings
 my @Compass_Direction;				# Names of the compass directions, populated by loadCompass
 my @Compass_Reversed;				# Names of the reversed compass directions, populated by loadCompass
 my @Gender;
@@ -118,11 +130,23 @@ sub nameTask($){
 	return $Translate_Task[$id]		if defined $Translate_Task[$id];
 	return "Task$id";
 }
+sub nameEvent($){
+	my $id	= shift;
+	return 'UnknownEvent'			unless defined $id;
+	return $Translate_Event[$id]	if defined $Translate_Event[$id];
+	return "Event$id";
+}
 sub namePerson($){
 	my $id	= shift;
 	return 'UnknownPerson'			unless defined $id;
 	return $Translate_Person[$id]	if defined $Translate_Person[$id];
 	return "Person$id";
+}
+sub nameGroup($){
+	my $id	= shift;
+	return 'UnknownGroup'			unless defined $id;
+	return $Translate_Group[$id]	if defined $Translate_Group[$id];
+	return "Group$id";
 }
 sub nameVariable($){
 	my $id	= shift;
@@ -429,28 +453,12 @@ sub parseRoom($){
 	#text	LastDesc
 	$room{LastDesc}			= nextSLV()	if $Gamefile_Version eq '3.80' or $Gamefile_Version eq '3.90';
 	#exit	RoomExits
-	my @exits;
-	my @restrictions;
-	my $exit_count	= 0;
-	foreach my $dir (0..$#Compass_Direction){
-		my $destination	= nextSLV();
-		if ($destination != 0){
-			$exit_count++;
-			$exits[$dir]	= $destination;
-			my $var1	= nextSLV();
-			my $var2	= nextSLV();
-			my $var3	= 0;
-			$var3		= nextSLV()			if $Gamefile_Version eq '4.00';
-			$restrictions[$dir]{Task}		= $var1;
-			$restrictions[$dir]{Type}		= '';
-			$restrictions[$dir]{Type}		= 'if'		if $var1;
-			$restrictions[$dir]{Type}		= 'unless'	if $var1 && $var2;
-			$restrictions[$dir]{Unknown}	= $var3;
-		}
+	my $exit_count			= 0;
+	$room{Exits}			= [];
+	for my $dir (0 .. $#Compass_Direction) { 
+		push @{ $room{Exits} }, parseExit();
+		$exit_count++	unless $room{Exits}[$dir]{Destination} eq 0;
 	}
-	$room{Exits}			= \@exits;
-	$room{ExitRestrictions}	= \@restrictions;
-	$room{ExitCount}		= $exit_count;
 	print $File_Log "\t\t\t$exit_count exit(s)\n"	if defined $Option_Verbose;
 	#text	AddDesc1
 	$room{AltDesc1}			= nextSLV()	if $Gamefile_Version eq '3.80' or $Gamefile_Version eq '3.90';
@@ -523,7 +531,7 @@ sub parseObject($){
 #	3: ALL_ROOMS
 #	4: NPC_PART
 #	9: NULL/Off-stage
-	$object{Where}				= ();
+	$object{Where}				= [];
 	push @{	$object{Where} }, nextSLV if $object{WhereType} eq 1;
 	if($object{WhereType} eq 2){
 		for my $room (0 .. $#Rooms){ push @{	$object{Where} }, $room if nextSLV(); }
@@ -602,13 +610,15 @@ sub parseObject($){
 	#number	OnlyWhenNotMoved
 	$object{InRoomDescType}		= 0			if $Gamefile_Version eq '3.80' or $Gamefile_Version eq '3.90';
 	$object{InRoomDescType}		= nextSLV() if $Gamefile_Version eq '4.00';
-	#Update the ObjectStatic and ObjectPortable references:
+	#Update the Object mapping references:
 	push @ObjectStatic,	$id		if $object{Static};
 	push @ObjectPortable, $id	unless $object{Static};
 	push @ObjectOpenable, $id	if $object{Openable};
 	push @ObjectContainer, $id	if $object{Container};
 	push @ObjectSurface, $id	if $object{Surface};
 	push @ObjectHolder,	$id		if $object{Container} || $object{Surface};
+	push @ObjectLieable, $id	if $object{Lieable};
+	push @ObjectSitStandable, $id	if $object{SitStandable};
 	return \%object;
 }
 sub parseTask($){
@@ -700,7 +710,7 @@ sub parseTask($){
 #	3: ALL_ROOMS
 #	4: NPC_PART
 #	9: NULL/Off-stage
-	$task{Where}					= ();
+	$task{Where}					= [];
 	push @{	$task{Where} }, nextSLV if $task{WhereType} eq 1;
 	if($task{WhereType} eq 2){
 		for my $room (1 .. $#Rooms){ push @{ $task{Where} }, $room if nextSLV(); }
@@ -1007,6 +1017,18 @@ sub parseRoomAlt(){
 	$alt{DisplayRoom}	= nextSLV();
 	return \%alt;
 }
+sub parseExit(){
+	my %exit		= ();
+	#destination
+	$exit{Destination}	= nextSLV();
+	if ($exit{Destination} != 0){
+		$exit{Var1}	= nextSLV();
+		$exit{Var2}	= nextSLV();
+		$exit{Var3}	= 0;
+		$exit{Var3}	= nextSLV()			if $Gamefile_Version eq '4.00';
+	}
+	return \%exit;
+}
 sub parseRestriction(){
 	my %restriction		= ();
 	#number	Type
@@ -1018,26 +1040,23 @@ sub parseRestriction(){
 	}
 	if($restriction{Type} eq 1){
 		$restriction{Var1}	= nextSLV();
-		$restriction{Var1}++	if $Gamefile_Version eq '3.90';
 		$restriction{Var2}	= nextSLV();
 	}
 	if($restriction{Type} eq 2){
 		$restriction{Var1}	= nextSLV();
-		$restriction{Var1}++	if $Gamefile_Version eq '3.90';
 		$restriction{Var2}	= nextSLV();
 	}
 	if($restriction{Type} eq 3){
 		$restriction{Var1}	= nextSLV();
-		$restriction{Var1}++	if $Gamefile_Version eq '3.90';
 		$restriction{Var2}	= nextSLV();
 		$restriction{Var3}	= nextSLV();
 	}
 	if($restriction{Type} eq 4){
 		$restriction{Var1}	= nextSLV();
-		$restriction{Var1}++	if $Gamefile_Version eq '3.90';
+		$restriction{Var1}++	if $Gamefile_Version eq '3.90' && $restriction{Var1};
 		$restriction{Var2}	= nextSLV();
 		$restriction{Var3}	= nextSLV();
-		$restriction{Var4}	= 0;
+		$restriction{Var4}	= '';
 		$restriction{Var4}	= nextSLV()		if $Gamefile_Version eq '4.00';
 	}
 	$restriction{FailureText}	= nextSLV();
@@ -1229,8 +1248,8 @@ sub arrayString($;$) {
 }
 sub translate(){
 	#Generate translation names
-	print $File_Log "Translating names:\n";
-	generateTranslation();
+	print $File_Log "Generating names:\n";
+	generateNames();
 	#Print object mapping tables
 	print $File_Log "Static Object IDs:\n";
 	for my $id (1 .. $#ObjectStatic){
@@ -1246,42 +1265,76 @@ sub translate(){
 	}
 }
 #Generate translation names, printing to mapping file if asked for
-sub generateTranslation(){
+sub generateNames(){
 	#Rooms
-	print $File_Mapping "#\t$#Rooms Rooms:\n" if defined $Option_Generate;
-	$Translate_Room[0]	= 'nowhere'											unless defined $Translate_Room[0];
-	for my $room (0 .. $#Rooms){
+	$Translate_Room[0]	= 'nowhere'				unless defined $Translate_Room[0];
+	for my $room (1 .. $#Rooms){
 		my $title				= uniformName($Rooms[$room]{Title});
-		print $File_Mapping "#Room$room\t = 'TODO'\t# Name: $title\n"	if defined $Option_Generate && not defined $Translate_Room[$room];
-		print $File_Mapping "Room$room\t = '$Translate_Room[$room]'\n"	if defined $Option_Generate && defined $Translate_Room[$room];
-		$Translate_Room[$room]	= $title								unless defined $Translate_Room[$room];
+		$Translate_Room[$room]	= $title		unless defined $Translate_Room[$room];
 	}
 	#TODO: RoomGroups
 	#Objects
-	print $File_Mapping "#\t$#Objects Objects:\n" if defined $Option_Generate;
-	$Translate_Object[0]		= 'nothing'	unless defined $Translate_Object[0];
+	$Translate_Object[0]		= 'nothing'		unless defined $Translate_Object[0];
 	for my $object (1 .. $#Objects){
 		my $name					= variableName("$Objects[$object]{Prefix} $Objects[$object]{Short}");
 		$Objects[$object]{Name}		= $name;
-		print $File_Mapping "#Object$object\t = '$name'\n"						if defined $Option_Generate && not defined $Translate_Object[$object];
-		print $File_Mapping "Object$object\t = '$Translate_Object[$object]'\n"	if defined $Option_Generate && defined $Translate_Object[$object];
-		$Translate_Object[$object]	= $name										unless defined $Translate_Object[$object];
+		$Translate_Object[$object]	= $name		unless defined $Translate_Object[$object];
 	}
 	#Tasks
-	print $File_Mapping "#\t$#Tasks Tasks:\n" if defined $Option_Generate;
 	for my $task (1 .. $#Tasks){
-		my $name				= uniformName($Tasks[$task]{Name});
-		print $File_Mapping "#Task$task\t = '$name'\n"					if defined $Option_Generate && not defined $Translate_Task[$task];
-		print $File_Mapping "Task$task\t = '$Translate_Task[$task]'\n"	if defined $Option_Generate && defined $Translate_Task[$task];
-		$Translate_Task[$task]	= $name									unless defined $Translate_Task[$task];
+		my @commands	= @{ $Tasks[$task]{Commands} };
+		my $name		= '';
+		$name			= variableName($Translate_Task[$task])	if defined $Translate_Task[$task];
+		foreach my $line (@commands){
+			$line	= variableName($line);
+			$name	= $line			if length($line) > length($name);
+		}
+		$Tasks[$task]{Name}		= $name;
+		$Translate_Task[$task]	= $name			unless defined $Translate_Task[$task];
 	}
-	#NPCs
-	print $File_Mapping "#\t$#Persons Persons:\n" if defined $Option_Generate;
+	#Persons
 	$Translate_Person[0]		= 'player'	unless defined $Translate_Person[0];
 	for my $person (1 .. $#Persons){
 		my $name					= uniformName($Persons[$person]{Prefix}.' '.$Persons[$person]{Name});
-		print $File_Mapping "#Person$person\t = 'TODO'\t# Name: $name\n"		if defined $Option_Generate && not defined $Translate_Person[$person];
-		print $File_Mapping "Person$person\t = '$Translate_Person[$person]'\n"	if defined $Option_Generate && defined $Translate_Person[$person];
+		$Translate_Person[$person]	= $name		unless defined $Translate_Person[$person];
+	}
+	#Variables
+	for my $variable (1 .. $#Variables){
+		my $name						= uniformName($Variables[$variable]{Name});
+		$Translate_Variable[$variable]	= $name	unless defined $Translate_Variable[$variable];
+	}
+
+}
+#Write the symbol mapping file - TODO this must be revamped, as the new generateNames sub *WILL* ensure all translations are set
+sub writeMapping(){
+	#Rooms
+	print $File_Mapping "#\t$#Rooms Rooms:\n";
+	for my $room (0 .. $#Rooms){
+		my $title				= uniformName($Rooms[$room]{Title});
+		print $File_Mapping "#Room$room\t = 'TODO'\t# Name: $title\n"	unless	defined $Translate_Room[$room];
+		print $File_Mapping "Room$room\t = '$Translate_Room[$room]'\n"	if		defined $Translate_Room[$room];
+	}
+	#TODO: RoomGroups
+	#Objects
+	print $File_Mapping "#\t$#Objects Objects:\n";
+	for my $object (0 .. $#Objects){
+		my $name	= $Objects[$object]{Name};
+		print $File_Mapping "#Object$object\t = '$name'\n"						unless	defined $Translate_Object[$object];
+		print $File_Mapping "Object$object\t = '$Translate_Object[$object]'\n"	if		defined $Translate_Object[$object];
+	}
+	#Tasks
+	print $File_Mapping "#\t$#Tasks Tasks:\n";
+	for my $task (1 .. $#Tasks){
+		my $name				= $Tasks[$task]{Name};
+		print $File_Mapping "#Task$task\t = 'TODO'\t# Name: $name\n"	unless	defined $Translate_Task[$task];
+		print $File_Mapping "Task$task\t = '$Translate_Task[$task]'\n"	if 		defined $Translate_Task[$task];
+	}
+	#Persons
+	print $File_Mapping "#\t$#Persons Persons:\n";
+	for my $person (0 .. $#Persons){
+		my $name				= uniformName($Persons[$person]{Prefix}.' '.$Persons[$person]{Name});
+		print $File_Mapping "#Person$person\t = 'TODO'\t# Name: $name\n"		unless	defined $Translate_Person[$person];
+		print $File_Mapping "Person$person\t = '$Translate_Person[$person]'\n"	if		defined $Translate_Person[$person];
 		$Translate_Person[$person]	= $name										unless defined $Translate_Person[$person];
 	}
 	#Variables
@@ -1290,18 +1343,62 @@ sub generateTranslation(){
 		my $name					= uniformName($Variables[$variable]{Name});
 		print $File_Mapping "#Variable$variable\t = 'TODO'\t# Name: $name\n"		if defined $Option_Generate && not defined $Translate_Variable[$variable];
 		print $File_Mapping "Variable$variable\t = '$Translate_Variable[$variable]'\n"	if defined $Option_Generate && defined $Translate_Variable[$variable];
-		$Translate_Variable[$variable]	= $name										unless defined $Translate_Variable[$variable];
 	}
 }
 sub analyze(){
-	#Analyze the objects, adding them to room and building the list of enclosing items
+	#Analyze rooms
+	print $File_Log "Analyzing rooms:\n";
+	for my $room (1 .. $#Rooms){ analyzeRoom($room) }
+	#Analyze objects
 	print $File_Log "Analyzing objects:\n";
 	for my $object (1 .. $#Objects){ analyzeObject($object) }
-	#Analyze the tasks to guess at what they do
+	#Analyze tasks
 	print $File_Log "Analyzing tasks:\n";
 	for my $task (1 .. $#Tasks){ analyzeTask($task) }
 }
-#Analyze the objects, adding them to room and building the list of enclosing items
+#Analyze a room
+sub analyzeRoom($){
+	my $room		= shift;
+	my $exits		= @{ $Rooms[$room]{Exits} };
+	#Interpret the exit restrictions; sclibrar.lib_can_go
+	for my $direction (0 .. $#Compass_Direction){
+		my %exit = %{ $Rooms[$room]{Exits}[$direction] };
+		# Destination; 0 indicates no exit
+		my $destination	= $exit{Destination};
+		next unless $destination;
+		my $var1		= $exit{Var1};	#	ID; 0 indicates no restriction
+		my $var2		= $exit{Var2};	#	ExpectedState
+		my $var3		= $exit{Var3};	#	Type
+		my $text		= "UNKNOWN RESTRICTION $var1 $var2 $var3";
+		# Restriction ID: 0 indicates no restriction
+		next unless $var1;
+		#Type determines the restriction
+		# 0: Task
+		if($var3 eq 0) {
+			# TaskID
+			my $task		= "UNKNOWN TASK $var1";
+			$task			= nameTask($var1)	if $var1 < @Tasks;
+			# ExpectedState determines condition
+			my $condition	= "UNKNOWN TASK-CONDITION $var2";
+			$condition		= 'if'		if $var2 eq 0;
+			$condition		= 'unless'	if $var2 eq 1;
+			#Assemble full text
+			$text	= "$condition $task is performed";
+		}
+		# 1: ObjectState
+		if($var3 eq 1) {
+			# ObjectID
+			my $objectID	= $ObjectOpenable[$var1];
+			my $object		= nameTask($objectID);
+			# ExpectedState		TODO
+			my $state		= "UNKNOWN STATE $var2";
+			#Assemble full text
+			$text	= "if $object is $state";
+		}
+		$Rooms[$room]{Exits}[$direction]{Restriction}	= $text if defined $text;
+	}
+}
+#Analyze an object
 sub analyzeObject($){
 	my $object			= shift;
 	#An object can be one of several types, depending on properties. We make this evaluation only once.
@@ -1317,170 +1414,591 @@ sub analyzeObject($){
 	}
 	#Store what we've calculated
 	$Objects[$object]{Type}		= $object_type;
-
-#	print $File_Log "\t\tWhereType:\t$Objects[$object]{WhereType}\n"			if defined $Option_Verbose;
-#	print $File_Log "\t\tWhere:\t".arrayString($Objects[$object]{Where})."\n"	if defined $Option_Verbose && defined $Objects[$object]{Where};
-#	print $File_Log "\t\tParent:\t$Objects[$object]{Parent}\n"					if defined $Option_Verbose && $Objects[$object]{Parent};
 }
 #Analyze a task, taking a guess at what it's meant to do and find a suiting name for it
 sub analyzeTask($){
 	my $task			= shift;
+	my $locations		= @{ $Tasks[$task]{Where} };
 	my $restrictions	= @{ $Tasks[$task]{Restrictions} };
 	my $actions			= @{ $Tasks[$task]{Actions} };
 	my @commands		= @{ $Tasks[$task]{Commands} };
-	
-	#Interpret the restrictions of the task
+	#Interpret the restrictions of the task; screstrs.restr_pass_task_restriction (pp21-22)
 	for my $id (0 .. $restrictions - 1){
-		my %restriction = %{ $Tasks[$task]{Restrictions}[$id] };
+		my %restriction	= %{ $Tasks[$task]{Restrictions}[$id] };
 		my $text;
-		#ObjectLocation
+		#ObjectLocation: ObjectID, Condition, Location;
 		if($restriction{Type} eq 0){
-			#ConditionType: 0=If
-			$text		= 'If '				if $restriction{Var2} eq 0;
-			#ConditionType: 1=Unless
-			$text		= 'Unless '			if $restriction{Var2} eq 1;
-			#ObjectID: 0=Nothing
-			$text		.= 'nothing '		if $restriction{Var1} eq 0;
-			#ObjectID: 1=Anything
-			$text		.= 'anything '		if $restriction{Var1} eq 1;
-			#ObjectID: 2=Referenced
-			$text		.= 'referenced '	if $restriction{Var1} eq 2;
-			#ObjectID: 3+: Object
-			$text		.= nameObject($ObjectPortable[$restriction{Var1} -2])	if $restriction{Var1} >=3;
-			#ObjectLocation 0: Carried
-			$text		.= ' is held'			if $restriction{Var3} eq 0;
-			#ObjectLocation 1+: Unknown, TODO
-			$text		.= " is $restriction{Var3} UNKNOWN TODO"	if $restriction{Var3} != 0;
+			my $var1	= $restriction{Var1};
+			my $var2	= $restriction{Var2};
+			my $var3	= $restriction{Var3};
+			#ObjectID
+			my $object		= "UNKNOWN OBJECT $var1";
+			# 0=Nothing
+			$object			= 'nothing'				if $var1 eq 0;
+			# 1=Anything
+			$object			= 'anything'			if $var1 eq 1;
+			# 2=Referenced
+			$object			= 'referenced object'	if $var1 eq 2;
+			# 3+: Portable Object
+			if ($var1 > 2 && $var1 <= (2 + @ObjectPortable)) {
+				my $objectID	= $ObjectPortable[$var1-2];
+				$object			= nameObject($objectID);
+				$ObjectTasks[$objectID][$task]++;
+			}
+			#ConditionType
+			my $condition	= "UNKNOWN CONDITION $var2";
+			# 0& 6=In Room
+			$condition		= 'located in'			if $var2 eq 0;
+			$condition		= 'not located in'		if $var2 eq 6;
+			# 1& 7=Carried by person
+			$condition		= 'carried by'			if $var2 eq 1;
+			$condition		= 'not carried by'		if $var2 eq 7;
+			# 2& 8=Worn by person
+			$condition		= 'worn by'				if $var2 eq 2;
+			$condition		= 'not worn by'			if $var2 eq 8;
+			# 3& 9=Visible to person
+			$condition		= 'visible to'			if $var2 eq 3;
+			$condition		= 'not visible to'		if $var2 eq 9;
+			# 4&10=Inside container
+			$condition		= 'inside'				if $var2 eq 4;
+			$condition		= 'not inside'			if $var2 eq 10;
+			# 5&11=On surface
+			$condition		= 'on top of'			if $var2 eq 5;
+			$condition		= 'not on top of'		if $var2 eq 11;
+			#Location; depending on condition
+			my $location	= "UNKNOWN LOCATION $var3";
+			# 0: Room
+			if ($var2 % 6 eq 0) {
+				my $roomID		= $var3;
+				$location		= nameRoom($roomID);
+				$RoomTasks[$roomID][$task]++;
+			}
+			# 1-3: Person
+			if ($var2 % 6 >= 1 && $var2 % 6 <= 3) {
+				# 0: The player
+				$location		= 'the player'		if $var3 eq 0;
+				# 1: The referenced person
+				$location		= 'referenced'		if $var3 eq 1;
+				# 2+: PersonID
+				if ($var3 > 1 && $var3 <= (1 + @Persons)){
+					my $personID	= $var3-1;
+					$location		= 'by '.namePerson($personID);
+					$TaskPersons[$task][$personID]++;
+				}
+			}
+			#4: Container
+			if ($var2 % 6 eq 4) {
+				my $objectID	= $ObjectContainer[$var3];
+				$location		= nameObject($objectID);
+				$ObjectTasks[$objectID][$task]++;
+			}
+			#5: Supporter
+			if ($var2 % 6 eq 5) {
+				my $objectID	= $ObjectSurface[$var3];
+				$location		= nameObject($objectID);
+				$ObjectTasks[$objectID][$task]++;
+			}
+			#Assemble the full text
+			$text	= "Unless $object is $condition $location";
 		}
-		#ObjectState	TODO
+		#ObjectState:	ObjectID, State		TODO
 		if($restriction{Type} eq 1){
-			#Var1: ObjectID
-			#Var2: State (open/closed)
+			my $var1	= $restriction{Var1};
+			my $var2	= $restriction{Var2};
+			#ObjectID
+			my $object		= "UNKNOWN OBJECT $var1";
+			# 0: Referenced
+			$object			= 'referenced object'		if $var1 eq 0;
+			# 1+: Openable ObjectID
+			if ($var1 > 0 && $var1 <= @ObjectOpenable) {
+				my $objectID	= $ObjectOpenable[$var1];
+				$object			= nameObject($objectID);
+				$ObjectTasks[$objectID][$task]++;
+			}
+			#State
+			my $state		= "UNKNOWN STATE $var2";
+			#Assemble the full text
+			$text	= "Unless $object is $state";
 		}
-		#UNKNOWN	TODO
+		#TaskState:		Task, State
 		if($restriction{Type} eq 2){
-			#Var1: 
-			#Var2:
+			my $var1	= $restriction{Var1};
+			my $var2	= $restriction{Var2};
+			#TaskID
+			my $task		= "UNKNOWN TASK $var1";
+			# 0: Referenced
+			$task			= 'all tasks'		if $var1 eq 0;
+			# 1+: TaskID
+			if ($var1 > 0 && $var1 <= @Tasks) {
+				my $taskID	= $var1;
+				$task		= nameTask($taskID)
+				#TODO Add task-task relation
+			}
+			#State
+			my $state		= "UNKNOWN STATE $var2";
+			# 0: Performed
+			$state			= 'performed'		if $var2 eq 0;
+			# 1: Not Performed
+			$state			= 'not performed'	if $var2 eq 1;
+			#Assemble the full text
+			$text	= "Unless $task is $state";
 		}
-		#UNKNOWN	TODO
+		#Person:		PersonID, Condition, Location
 		if($restriction{Type} eq 3){
-			#Var1: 
-			#Var2:
-			#Var3:
+			my $var1	= $restriction{Var1};
+			my $var2	= $restriction{Var2};
+			my $var3	= $restriction{Var3};
+			#PersonID
+			my $person		= "UNKNOWN PERSON $var1";
+			# 0: Player
+			$person			= 'the player'				if $var1 eq 0;
+			# 1: Referenced
+			$person			= 'referenced person'		if $var1 eq 1;
+			# 2+: PersonID
+			if ($var1 > 1 && $var1 <= (1 + @Persons)){
+				my $personID	= $var1-1;
+				$person			= namePerson($personID);
+				$TaskPersons[$task][$personID]++;
+			}
+			#Condition
+			my $condition	= "UNKNOWN CONDITION $var2";
+			# 0=In same room as
+			$condition		= 'in the presence of'		if $var2 eq 0;
+			# 1=Not in same room as
+			$condition		= 'not in the presence of'	if $var2 eq 1;
+			# 2=Alone
+			$condition		= 'alone'					if $var2 eq 2;
+			# 3=Not Alone
+			$condition		= 'not alone'				if $var2 eq 3;
+			# 4=Standing on
+			$condition		= 'standing on'				if $var2 eq 4;
+			# 5=Sitting on
+			$condition		= 'sitting on'				if $var2 eq 5;
+			# 6=Lying on
+			$condition		= 'lying on'				if $var2 eq 6;
+			# 7=Gender
+			$condition		= ''						if $var2 eq 7;
+			#Location; depending on condition
+			my $location	= "UNKNOWN LOCATION $var3";
+			#0-1: Person
+			if ($var2 eq 0 or $var2 eq 1) {
+				# 0=Player
+				$location		= 'the player'			if $var3 eq 0;
+				# 1=Referenced
+				$location		= 'referenced'			if $var3 eq 1;
+				# 2+: PersonID
+				if ($var3 > 1 && $var3 <= (1 + @Persons)) {
+					my $personID	= $var3-1;
+					$location		= namePerson($personID);
+					$TaskPersons[$task][$personID]++;
+				}
+			}
+			#2-3: Blank
+			if ($var2 eq 2 or $var2 eq 3) {
+				$location		= '';
+			}
+			#4-5: Sit/Standable
+			if ($var2 eq 4 or $var2 eq 5) {
+				my $objectID	= $ObjectSitStandable[$var3];
+				$location		= nameObject($objectID);
+				$ObjectTasks[$objectID][$task]++;
+			}
+			#6: Lieable
+			if ($var2 eq 6) {
+				my $objectID	= $ObjectLieable[$var3];
+				$location		= nameObject($objectID);
+				$ObjectTasks[$objectID][$task]++;
+			}
+			#7: Gender
+			if ($var2 eq 7) {
+				$location		= nameGender($var3);
+			}
+			#Assemble the full text
+			$text	= "Unless $person is $condition $location";
 		}
-		#UNKNOWN	TODO
+		#Variable:		VariableID, Operator, Number, Text
 		if($restriction{Type} eq 4){
-			#Var1: 
-			#Var2:
-			#Var3:
-			#Var4:
+			my $var1	= $restriction{Var1};
+			my $var2	= $restriction{Var2};
+			my $var3	= $restriction{Var3};
+			my $var4	= $restriction{Var4};
+			#Variable
+			my $variable	= "UNKNOWN VARIABLE $var1";
+			my $numeric		= 0;
+			# 0: Referenced Number
+			if ($var1 eq 0) {
+				$variable		= 'referenced number';
+				$numeric		= 1;
+			}
+			# 1: Referenced String
+			if ($var1 eq 1) {
+				$variable		= 'referenced text';
+				$numeric		= 0;
+			}
+			# 2+: Variable
+			if ($var1 > 1 && $var1 <= (1 + @Variables)) {
+				my $variableID	= $var1-1;
+				$variable		= nameVariable($variableID);
+				$numeric		= 1 if $Variables[$variableID]{Type} eq 0;
+				$TaskVariables[$task][$variableID]++;
+			}
+			#Operator determines comparator
+			my $operator	= "UNKNOWN OPERATOR $var2";
+			my $comparator	= "UNKNOWN COMPARATOR $var2";
+			if ($numeric) {	# Numeric variables
+				# 0,10: <
+				$operator		= '<'	if $var2 % 10 eq 0;
+				# 1,11: <
+				$operator		= '<='	if $var2 % 10 eq 1;
+				# 2,12: ==
+				$operator		= '=='	if $var2 % 10 eq 2;
+				# 3,13: >=
+				$operator		= '>='	if $var2 % 10 eq 3;
+				# 4,14: >
+				$operator		= '>'	if $var2 % 10 eq 4;
+				# 5,15: !=
+				$operator		= '!='	if $var2 % 10 eq 5;
+				#Direct value comparison
+				if ($var2 < 10){
+					$comparator		= $var3;
+				}
+				#Reference comparison
+				else {
+					$comparator		= 'referenced number'	if $var3 eq 0;
+					if ($var3 > 0 && $var3 <= @Variables) {
+						my $variableID	= $var3;
+						$comparator		= nameVariable($variableID);
+						$TaskVariables[$task][$variableID]++;
+					}
+				}
+			}
+			else {	# String variables
+				$comparator	= $var4;
+				# 0: ==
+				$operator	= '=='	if $var2 eq 0;
+				# 1: !=
+				$operator	= '!='	if $var2 eq 1;
+			}
+			#Assemble the full text
+			$text	= "Unless $variable $operator $comparator";
+			#Formula	TODO
+			$text	.= " UNKNOWN FORMULA $var4"	unless $var4 eq '';
 		}
 		$Tasks[$task]{Restrictions}[$id]{Condition}		= $text if defined $text;
 	}
 	#Interpret the actions of the task
 	for my $id (0 .. $actions - 1){
-		my %action = %{ $Tasks[$task]{Actions}[$id] };
+		my %action	= %{ $Tasks[$task]{Actions}[$id] };
+		my $type	= $action{Type};
 		my $text;
-		#Move Object to DestinationType/ID
-		if($action{Type} eq 0){
-			$text			= 'Move ';
-			#Object: 0-> All Carried
-			$text			.= 'all held objects '	if $action{Var1} eq 0;
-			#Object: 1-> All Worn
-			$text			.= 'all worn objects '	if $action{Var1} eq 1;
-			#Object: 2-> Referenced
-			$text			.= 'referenced object '	if $action{Var1} eq 2;
-			#Object: 3-> Object ID (-2)
-			$text			.= nameObject($ObjectPortable[$action{Var1} - 2]) 		if $action{Var1} >= 3;
-			#DestinationType: 0->Room
-			$text		.= ' to ' . nameRoom($action{Var3})							if $action{Var2} eq 0;
-			#DestinationType: 1->Group	TODO
-			$text		.= ' to Group' . $action{Var3}								if $action{Var2} eq 1;
-			#DestinationType: 2->Inside Object
-			$text		.= ' inside ' . nameObject($ObjectContainer[$action{Var3}])	if $action{Var2} eq 2;
-			#DestinationType: 3->Onto Object
-			$text		.= ' onto ' . nameObject($ObjectSurface[$action{Var3}])		if $action{Var2} eq 3;
-			#DestinationType: 4->Carried By
-			$text		.= ' carried by ' . namePerson($action{Var3})				if $action{Var2} eq 4;
-			#DestinationType: 5->Worn By
-			$text		.= ' worn by ' . namePerson($action{Var3})					if $action{Var2} eq 5;
-			#DestinationType: 6->Same Room As
-			$text		.= ' to location of ' . namePerson($action{Var3})			if $action{Var2} eq 5;
+		#MoveObject:	ObjectID, DestinationType, Location
+		if($type eq 0){
+			my $var1	= $action{Var1};
+			my $var2	= $action{Var2};
+			my $var3	= $action{Var3};
+			#ObjectID
+			my $object		= "UNKNOWN PERSON $var1";
+			# 0: All Carried
+			$object			= 'all held objects'	if $var1 eq 0;
+			# 1: All Worn
+			$object			= 'all worn objects'	if $var1 eq 1;
+			# 2: Referenced
+			$object			= 'referenced object'	if $var1 eq 2;
+			# 3+: Portable Object
+			if ($var1 > 2 && $var1 <= (2 + @ObjectPortable)) {
+				my $objectID	= $ObjectPortable[$var1-2];
+				$object			= nameObject($objectID);
+				$ObjectTasks[$objectID][$task]++;
+			}
+			#DestinationType determines the value of the Location
+			my $destination	= "UNKNOWN DESTINATION $var2 TO $var3";
+			# 0: Room
+			if ($var2 eq 0) {
+				# 0: Nowhere
+				$destination	= 'off stage'	if $var3 eq 0;
+				# 1+: Room
+				if ($var3 > 0 && $var3 <= @Rooms) {
+					my $roomID		= $var3;
+					$destination	= 'to '.nameRoom($roomID);
+					$RoomTasks[$roomID][$task]++;
+				}
+			}
+			# 1: RoomGroup
+			if ($var2 eq 1) {
+				my $groupID		= $var3;
+				$destination	= 'to random room in '.nameGroup($groupID);
+				$TaskGroups[$task][$groupID]++;
+			}
+			# 2: Container
+			if ($var2 eq 2) {
+				my $objectID	= $ObjectContainer[$var3];
+				$destination	= 'inside '.nameObject($objectID);
+				$ObjectTasks[$objectID][$task]++;
+			}				
+			# 3: Supporter
+			if ($var2 eq 3) {
+				my $objectID	= $ObjectSurface[$var3];
+				$destination	= 'on top of '.nameObject($objectID);
+				$ObjectTasks[$objectID][$task]++;
+			}
+			# 4: Carried by Person
+			if ($var2 eq 4) {
+				my $target	= "UNKNOWN TARGET $var3";
+				# 0: The player
+				$target		= 'the player'			if $var3 eq 0;
+				# 1: Referenced Person
+				$target		= 'referenced person'	if $var3 eq 1;
+				# 2+: Person
+				if ($var3 > 1 && $var3 <= 1 + @Persons) {
+					my $personID	= $var3 - 1;
+					$target			= namePerson($personID);
+					$TaskPersons[$task][$personID]++;
+				}
+				$destination	= "to $target (carried)";
+			}
+			# 5: Worn by Person
+			if ($var2 eq 5) {
+				my $target	= "UNKNOWN TARGET $var3";
+				# 0: The player
+				$target		= 'the player'			if $var3 eq 0;
+				# 1: Referenced Person
+				$target		= 'referenced person'	if $var3 eq 1;
+				# 2+: Person
+				if ($var3 > 1 && $var3 <= 1 + @Persons) {
+					my $personID	= $var3 - 1;
+					$target			= namePerson($personID);
+					$TaskPersons[$task][$personID]++;
+				}
+				$destination	= "to $target (worn)";
+			}
+			# 6: Location of Person
+			if ($var2 eq 6) {
+				my $target	= "UNKNOWN TARGET $var3";
+				# 0: The player
+				$target		= 'the player'			if $var3 eq 0;
+				# 1: Referenced Person
+				$target		= 'referenced person'	if $var3 eq 1;
+				# 2+: Person
+				if ($var3 > 1 && $var3 <= 1 + @Persons) {
+					my $personID	= $var3 - 1;
+					$target			= namePerson($personID);
+					$TaskPersons[$task][$personID]++;
+				}
+				$destination	= "to location of $target";
+			}
+			#Assemble the full text
+			$text	= "Move $object $destination";
 		}
-		#Move Character to DestinationType/ID
-		if($action{Type} eq 1){
-			$text			= 'Move ';
-			#Person: 0-> Player
-			$text			.= 'Player '						if $action{Var1} eq 0;
-			#Person: 1-> Referenced
-			$text			.= 'referenced person '				if $action{Var1} eq 1;
-			#Person: 2-> Person ID (-1)
-			$text			.= namePerson($action{Var1} - 1)	if $action{Var1} >= 2;
-			#DestinationType: 0->Room
-			$text		.= ' to ' . nameRoom($action{Var3})		if $action{Var2} eq 0;
-			#DestinationType: 1->Group	TODO
-			$text		.= ' to Group' . $action{Var3}						if $action{Var2} eq 1;
-			#DestinationType: 2->Same Room As
-			$text		.= ' to location of ' . namePerson($action{Var3})	if $action{Var2} eq 2;
-			#DestinationType: 3->Standing On Object (0=nothing)
-			$text		.= ' to standing on ' . nameObject($ObjectSurface[$action{Var3}])		if $action{Var2} eq 3;
-			#DestinationType: 4->Sitting On Object (0=nothing)
-			$text		.= ' to sitting on ' . namePerson($action{Var3})	if $action{Var2} eq 4;
-			#DestinationType: 5->Lying On Object (0=nothing)
-			$text		.= ' to lying on ' . namePerson($action{Var3})		if $action{Var2} eq 5;
+		#MovePerson:	PersonID, DestinationType, Location
+		if($type eq 1){
+			my $var1	= $action{Var1};
+			my $var2	= $action{Var2};
+			my $var3	= $action{Var3};
+			#PersonID
+			my $person		= "UNKNOWN PERSON $var1";
+			# 0: Player
+			$person			= 'the player'			if $var1 eq 0;
+			# 1: Referenced
+			$person			= 'referenced person'	if $var1 eq 1;
+			# 2+: Person
+			if ($var1 > 1 && $var1 <= (1 + @Persons)) {
+				my $personID	= $var1-1;
+				$person			= namePerson($personID);
+				$TaskPersons[$task][$personID]++;
+			}
+			#DestinationType determines the value of the Location
+			my $destination	= "UNKNOWN DESTINATION $var2 TO $var3";
+			# 0: Room
+			if ($var2 eq 0) {
+				# 0: Nowhere
+				$destination	= 'off stage'	if $var3 eq 0;
+				# 1+: Room
+				if ($var3 > 0 && $var3 <= @Rooms) {
+					my $roomID		= $var3;
+					$destination	= 'to '.nameRoom($roomID);
+					$RoomTasks[$roomID][$task]++;
+				}
+			}
+			# 1: RoomGroup
+			if ($var2 eq 1) {
+				my $groupID		= $var3;
+				$destination	= 'to random room in '.nameGroup($groupID);
+				$TaskGroups[$task][$groupID]++;
+			}
+			# 2: Location of Person
+			if ($var2 eq 2) {
+				my $target	= "UNKNOWN TARGET $var3";
+				# 0: The player
+				$target		= 'the player'			if $var3 eq 0;
+				# 1: Referenced Person
+				$target		= 'referenced person'	if $var3 eq 1;
+				# 2+: Person
+				if ($var3 > 1 && $var3 <= 1 + @Persons) {
+					my $personID	= $var3 - 1;
+					$target			= namePerson($personID);
+					$TaskPersons[$task][$personID]++;
+				}
+				$destination	= "to location of $target";
+			}
+			# 3: Standing on
+			if ($var2 eq 3) {
+				my $objectID	= $ObjectSitStandable[$var3];
+				$destination	= 'standing on '.nameObject($objectID);
+				$ObjectTasks[$objectID][$task]++;
+			}
+			# 4: Sitting on
+			if ($var2 eq 4) {
+				my $objectID	= $ObjectSitStandable[$var3];
+				$destination	= 'sitting on '.nameObject($objectID);
+				$ObjectTasks[$objectID][$task]++;
+			}
+			# 5: Lying on
+			if ($var2 eq 5) {
+				my $objectID	= $ObjectLieable[$var3];
+				$destination	= 'lying on '.nameObject($objectID);
+				$ObjectTasks[$objectID][$task]++;
+			}			
+			#Assemble the full text
+			$text	= "Move $person $destination";
 		}
-		#Change Object Status
-		if($action{Type} eq 2){
-			$text			= 'Change ';
-			#OpenableObjectID
-			$text		.=  nameObject($ObjectOpenable[$action{Var1}]);
-			#OpenableStatus: 0->Open
-			$text		.= ' to Open'			if $action{Var2} eq 0;
-			#OpenableStatus: 1->Closed
-			$text		.= ' to Closed'			if $action{Var2} eq 1;
+		#ObjectState:	ObjectID, State		TODO
+		if($type eq 2){
+			my $var1	= $action{Var1};
+			my $var2	= $action{Var2};
+			#ObjectID
+			my $object		= "UNKNOWN OBJECT $var1";
+			# 0: Referenced
+			$object			= 'referenced object'		if $var1 eq 0;
+			# 1+: Openable ObjectID
+			if ($var1 > 0 && $var1 <= @ObjectOpenable) {
+				my $objectID	= $ObjectOpenable[$var1];
+				$object			= nameObject($objectID);
+				$ObjectTasks[$objectID][$task]++;
+			}
+			#State
+			my $state		= "UNKNOWN STATE $var2";
+			#TODO VERIFY 0=open 1=closed?
+			#Assemble the full text
+			$text	= "Now $object is $state";
 		}
-		#Set VariableID to ChangeType by/between Numbers or Expression
-		if($action{Type} eq 3){
-			$text			= 'Modify ';
-				#VariableID
-			$text			.= nameVariable($action{Var1});
-			#ChangeType: 0->To Exact
-			$text		.= " to $action{Var3}"								if $action{Var2} eq 0;
-			#ChangeType: 1->By Exact
-			$text		.= " by $action{Var3}"								if $action{Var2} eq 1;
-			#ChangeType: 2->To Random
-			$text		.= " to between $action{Var3} and $action{Var5}"	if $action{Var2} eq 2;
-			#ChangeType: 3->By Random
-			$text		.= " by between $action{Var3} and $action{Var5}"	if $action{Var2} eq 3;
-			#ChangeType: 4->To Reference
-			$text		.= " to referenced value"							if $action{Var2} eq 4;
-			#ChangeType: 5->To Reference
-			$text		.= " to formula: $action{Expr}"								if $action{Var2} eq 5;
+		#Variable:		VariableID, Operator, Min
+		if($type eq 3){
+			my $var1	= $action{Var1};
+			my $var2	= $action{Var2};
+			my $var3	= $action{Var3};
+			my $expr	= $action{Expr};
+			my $var5	= $action{Var5};
+			#Variable
+			my $variable	= "UNKNOWN VARIABLE $var1";
+			my $numeric		= 0;
+			# 0+: Variable
+			if ($var1 >= 0 && $var1 < @Variables) {
+				my $variableID	= $var1+1;
+				$variable		= nameVariable($variableID);
+				$numeric		= 1 if $Variables[$variableID]{Type} eq 0;
+				$TaskVariables[$task][$variableID]++;
+			}
+			#Operator determines value
+			my $operator	= "UNKNOWN OPERATOR $var2";
+			my $value		= "UNKNOWN VALUE $var3:$var5:$expr";
+			if ($numeric) {	#Numeric variable
+				# 0: assign
+				if ($var2 eq 0){
+					$operator	= 'to';
+					$value		= $var3;
+				}
+				# 1: increase
+				if ($var2 eq 1){
+					$operator	= 'by';
+					$value		= $var3;
+				}
+				# 2: assign range
+				if ($var2 eq 2){
+					$operator	= 'to';
+					$value		= "between $var3 and $var5";
+				}
+				# 3: increase range
+				if ($var2 eq 3){
+					$operator	= 'by';
+					$value		= "between $var3 and $var5";
+				}
+				# 4: Referenced value
+				if ($var2 eq 4){
+					$operator	= 'to';
+					$value		= 'referenced value';
+				}
+				# 5: to formula
+				if ($var2 eq 5){
+					$operator	= 'to';
+					$value		= $expr;
+				}
+			}
+			else {	#String variable
+				# 0: assign
+				if ($var2 eq 0){
+					$operator	= 'to';
+					$value		= $expr;
+				}
+				# 1: Referenced value
+				if ($var2 eq 1){
+					$operator	= 'to';
+					$value		= 'referenced value';
+				}
+				# 2: to formula
+				if ($var2 eq 2){
+					$operator	= 'to';
+					$value		= $expr;
+				}
+			}
+			
+			$text		= "Change $variable $operator $value";
 		}
-		#Increase Score
-		if($action{Type} eq 4){
-			$text			= "Increase Score by $action{Var1}";
+		#Score:			Modifier
+		if($type eq 4){
+			$text			= "Modify score by $action{Var1}";
 		}
-		#Unknown	TODO v4.00
-		if($action{Type} eq 5){
-			#Var1: Unknown
-			#Var2: Unknown
+		#Task:			Direction, Task
+		if($type eq 5){
+			my $var1	= $action{Var1};
+			my $var2	= $action{Var2};
+			#Direction
+			my $direction	= "UNKNOWN DIRECTION $var1";
+			# 0: Run
+			$direction		= 'Run'		if $var1 eq 0;
+			# 1: Undo
+			$direction		= 'Undo'	if $var1 eq 1;
+			#Task
+			my $task		= "UNKNOWN TASK $var2";
+			#0+: Task ID
+			if ($var2 >= 0 && $var2 < @Tasks) {
+				my $taskID	= $var2 + 1;
+				$task		= nameTask($taskID);
+				#TODO: Add task-task reference
+			}
+			$text		= "$direction $task";
 		}
-		#End Game
-		if($action{Type} eq 6){
-			#Var2: UNKNOWN TODO
-			#EndType 1: Win
-			$text			= 'End the game in victory'		if $action{Var1} eq 1;
-			#EndType 2: Failure
-			$text			= 'End the game in failure'		if $action{Var1} eq 2;
-			#EndType 3: Death
-			$text			= 'End the game in death'		if $action{Var1} eq 3;
+		#End Game:		Ending
+		if($type eq 6){
+			my $var1	= $action{Var1};
+			my $var2	= $action{Var2};
+			#Ending:
+			my $ending	= "UNKNOWN ENDING $var1 $var2";
+			# 0: Win
+			$ending		= 'victory'	if $var1 eq 0;
+			# 1: Failure
+			$ending		= 'failure'	if $var1 eq 1;
+			# 2: Death
+			$ending		= 'death'	if $var1 eq 2;
+			#Assemble final text
+			$text		= "End the game in $ending";
 		}
-		#Unknown	TODO v4.00
-		if($action{Type} eq 7){
-			#Var1
-			#Var2
-			#Var3
+		#Battle:		TODO
+		if($type eq 7){
+			my $var1	= $action{Var1};
+			my $var2	= $action{Var2};
+			my $var3	= $action{Var3};
+			#Assemble final text
+			$text		= "UNKNOWN BATTLE $var1 $var2 $var3";
 		}
 		$Tasks[$task]{Actions}[$id]{Text}	= $text if defined $text;
 	}
@@ -1548,7 +2066,7 @@ sub generateXML(){
 	generateXMLPersons();
 	#generateXMLEvents();
 	generateXMLVariables();
-	print $File_XML "</Story>";
+	writeXMLElementClose('Story');
 }
 #Generate the story part of the XML output
 sub generateXMLGlobals(){
@@ -1581,61 +2099,94 @@ sub generateXMLRooms(){
 	writeXMLElementOpen('Rooms')	if $#Rooms;
 	for my $room (1 .. $#Rooms){
 		writeXMLElementOpen('Room');
-		#Attributes
-		writeXMLElementOpen('Attributes');
-		writeXMLElement('ID', 		$room);
-		writeXMLElement('Title', 	$Rooms[$room]{Title});
-		writeXMLElement('Name', 	nameRoom($room));
-		writeXMLElement('Hidden')	if $Rooms[$room]{Hidden};
-		writeXMLElementClose('Attributes');
-		#Descriptions
-		#TODO: Resource
-		writeXMLElementOpen('Descriptions');
-		#Default
-		writeXMLElementOpen('Description');
-		writeXMLElement('Text',	$Rooms[$room]{Description});
-		writeXMLElementClose('Description');
-		#v3 style alternate descriptions
-		if($Rooms[$room]{AltDesc1Task}){
-			writeXMLElementOpen('Description');
-			writeXMLElement('Text',	$Rooms[$room]{AltDesc1});
-			writeXMLElement('Task',	$Rooms[$room]{AltDesc1Task});
-			writeXMLElement('Name',	nameTask($Rooms[$room]{AltDesc1Task}));
-			writeXMLElementClose('Description');
+		{	#Attributes
+			writeXMLElementOpen('Attributes');
+			writeXMLElement('ID', 		$room);
+			writeXMLElement('Title', 	$Rooms[$room]{Title});
+			writeXMLElement('Name', 	nameRoom($room));
+			writeXMLElement('Hidden')	if $Rooms[$room]{Hidden};
+			writeXMLElementClose('Attributes');
 		}
-		if($Rooms[$room]{AltDesc2Task}){
+		{	#Descriptions
+			#TODO: Resource
+			writeXMLElementOpen('Descriptions');
+			#Default
 			writeXMLElementOpen('Description');
-			writeXMLElement('Text',	$Rooms[$room]{AltDesc2});
-			writeXMLElement('Task',	$Rooms[$room]{AltDesc2Task});
-			writeXMLElement('Name',	nameTask($Rooms[$room]{AltDesc2Task}));
+			writeXMLElement('Text',	$Rooms[$room]{Description});
 			writeXMLElementClose('Description');
-		}
-		if($Rooms[$room]{AltDesc3Obj}){
-			writeXMLElementOpen('Description');
-			writeXMLElement('Text',		$Rooms[$room]{AltDesc3});
-			writeXMLElement('Object',	$Rooms[$room]{AltDesc3Obj});
-			writeXMLElement('Name',	nameObject( $ObjectPortable[ $Rooms[$room]{AltDesc3Obj}] ) );
-			writeXMLElementClose('Description');
-		}
-		#TODO: v4 style alternate descriptions
-		writeXMLElementClose('Descriptions');
-		#Exits
-		writeXMLElementOpen('Exits');
-		foreach my $direction (0..$#Compass_Direction){
-			if (defined $Rooms[$room]{Exits}[$direction]){
-				writeXMLElementOpen('Exit');
-				writeXMLElement('Direction',		$Compass_Direction[$direction]);
-				writeXMLElement('DestinationID',	$Rooms[$room]{Exits}[$direction]);
-				writeXMLElement('Destination',		nameRoom($Rooms[$room]{Exits}[$direction]));
-				writeXMLElement('RestrictionType',	$Rooms[$room]{ExitRestrictions}[$direction]{Type})	if $Rooms[$room]{ExitRestrictions}[$direction]{Type};
-				writeXMLElement('RestrictionTask',	$Rooms[$room]{ExitRestrictions}[$direction]{Task})	if $Rooms[$room]{ExitRestrictions}[$direction]{Task};
-				writeXMLElement('RestrictionName',	nameTask($Rooms[$room]{ExitRestrictions}[$direction]{Task}))	if $Rooms[$room]{ExitRestrictions}[$direction]{Task};
-				writeXMLElement('Unknown',		$Rooms[$room]{ExitRestrictions}[$direction]{Unknown})	if $Rooms[$room]{ExitRestrictions}[$direction]{Unknown};
-				writeXMLElementClose('Exit');
+			#v3 style alternate descriptions
+			if($Rooms[$room]{AltDesc1Task}){
+				writeXMLElementOpen('Description');
+				writeXMLElement('Text',	$Rooms[$room]{AltDesc1});
+				writeXMLElement('Task',	$Rooms[$room]{AltDesc1Task});
+				writeXMLElement('Name',	nameTask($Rooms[$room]{AltDesc1Task}));
+				writeXMLElementClose('Description');
 			}
+			if($Rooms[$room]{AltDesc2Task}){
+				writeXMLElementOpen('Description');
+				writeXMLElement('Text',	$Rooms[$room]{AltDesc2});
+				writeXMLElement('Task',	$Rooms[$room]{AltDesc2Task});
+				writeXMLElement('Name',	nameTask($Rooms[$room]{AltDesc2Task}));
+				writeXMLElementClose('Description');
+			}
+			if($Rooms[$room]{AltDesc3Obj}){
+				writeXMLElementOpen('Description');
+				writeXMLElement('Text',		$Rooms[$room]{AltDesc3});
+				writeXMLElement('Object',	$Rooms[$room]{AltDesc3Obj});
+				writeXMLElement('Name',	nameObject( $ObjectPortable[ $Rooms[$room]{AltDesc3Obj}] ) );
+				writeXMLElementClose('Description');
+			}
+			#v4 style alternate descriptions
+			my @alternates	= ();
+			@alternates		= @{ $Rooms[$room]{Alternates} } if defined $Rooms[$room]{Alternates};
+			foreach my $alternate (0..$#alternates){
+				writeXMLElementOpen('Description');
+				writeXMLElement('M1',			$alternates[$alternate]{M1});
+				writeXMLElement('Type',			$alternates[$alternate]{Type});
+				#TODO: Resource1
+				writeXMLElement('M2',			$alternates[$alternate]{M2});
+				writeXMLElement('Var2',			$alternates[$alternate]{Var2});
+				#TODO: Resource2
+				writeXMLElement('HideObjects',	$alternates[$alternate]{HideObjects});
+				writeXMLElement('Changed',		$alternates[$alternate]{Changed});
+				writeXMLElement('Var3',			$alternates[$alternate]{Var3});
+				writeXMLElement('DisplayRoom',	$alternates[$alternate]{DisplayRoom});
+				writeXMLElementClose('Description');
+			}
+			writeXMLElementClose('Descriptions');
 		}
-		writeXMLElementClose('Exits');
-		#TODO: Related Tasks
+		{	#Exits
+			writeXMLElementOpen('Exits');
+			foreach my $direction (0..$#Compass_Direction){
+				my $destination	= $Rooms[$room]{Exits}[$direction]{Destination};
+				if ($destination){
+					writeXMLElementOpen('Exit');
+					writeXMLElement('Direction',		$Compass_Direction[$direction]);
+					writeXMLElement('DestinationID',	$destination);
+					writeXMLElement('Destination',		nameRoom($destination));
+					writeXMLElement('Restriction',		$Rooms[$room]{Exits}[$direction]{Restriction}) if defined $Rooms[$room]{Exits}[$direction]{Restriction};
+					writeXMLElementClose('Exit');
+				}
+			}
+			writeXMLElementClose('Exits');
+		}
+		{	#Relations
+			my @task_relations	= ();
+			for my $task (1..$#Tasks){ push @task_relations, $task if defined $RoomTasks[$room][$task] }
+			my $relations	= @task_relations;
+			writeXMLElementOpen('Relations')	if $relations;
+			{	#Tasks
+				writeXMLElementOpen('Tasks')		if @task_relations;
+				for my $task (@task_relations) {
+					writeXMLElementOpen('Task');
+					writeXMLElement('ID', $task);
+					writeXMLElement('Name', nameTask($task));
+					writeXMLElementClose('Task');
+				}
+				writeXMLElementClose('Tasks')		if @task_relations;
+			}
+			writeXMLElementClose('Relations')	if $relations;
+		}
 		writeXMLElementClose('Room');
 	}
 	writeXMLElementClose('Rooms')	if $#Rooms;
@@ -1647,49 +2198,69 @@ sub generateXMLPersons(){
 	writeXMLElementOpen('Persons') if $#Persons;
 	for my $person (1 .. $#Persons){
 		writeXMLElementOpen('Person');
-		#Attributes
-		writeXMLElementOpen('Attributes');
-		writeXMLElement('ID',			$person);
-		writeXMLElement('Title',		$Persons[$person]{Name});
-		writeXMLElement('Name',			namePerson($person));
-		foreach my $alias ( @{$Persons[$person]{Alias} } ){
-			writeXMLElement('Alias',	$alias) unless $alias eq '';
+		{	#Attributes
+			writeXMLElementOpen('Attributes');
+			writeXMLElement('ID',			$person);
+			writeXMLElement('Title',		$Persons[$person]{Name});
+			writeXMLElement('Name',			namePerson($person));
+			foreach my $alias ( @{$Persons[$person]{Alias} } ){
+				writeXMLElement('Alias',	$alias) unless $alias eq '';
+			}
+			writeXMLElement('Gender',		nameGender($Persons[$person]{Gender}));
+			writeXMLElement('Location_ID',	$Persons[$person]{StartRoom});
+			writeXMLElement('Location',		nameRoom($Persons[$person]{StartRoom}));
+			writeXMLElement('Presence',		$Persons[$person]{InRoomText});
+			writeXMLElement('Entering',		$Persons[$person]{EnterText});
+			writeXMLElement('Leaving',		$Persons[$person]{ExitText});
+			writeXMLElementClose('Attributes');
 		}
-		writeXMLElement('Gender',		nameGender($Persons[$person]{Gender}));
-		writeXMLElement('Location_ID',	$Persons[$person]{StartRoom});
-		writeXMLElement('Location',		nameRoom($Persons[$person]{StartRoom}));
-		writeXMLElement('Presence',		$Persons[$person]{InRoomText});
-		writeXMLElement('Entering',		$Persons[$person]{EnterText});
-		writeXMLElement('Leaving',		$Persons[$person]{ExitText});
-		writeXMLElementClose('Attributes');
-		#Descriptions
-		writeXMLElementOpen('Descriptions');
-		writeXMLElementOpen('Description');
-		writeXMLElement('Text',	$Persons[$person]{Description});
-		writeXMLElementClose('Description');
-		if($Persons[$person]{AltDescTask}){
-			writeXMLElementOpen('Description');
-			writeXMLElement('Text',	$Persons[$person]{AltDesc});
-			writeXMLElement('Task',	$Persons[$person]{AltDescTask});
-			writeXMLElement('Name',	nameTask($Persons[$person]{AltDescTask}));
-			writeXMLElementClose('Description');
-		}
-		writeXMLElementClose('Descriptions');
-		#Topics
-		writeXMLElementOpen('Topics');
-		foreach my $topic ( @{$Persons[$person]{Topics} } ){
-			writeXMLElementOpen('Topic');
-			writeXMLElement('Subject',		$topic->{Subject});
-			writeXMLElement('Reply',		$topic->{Reply});
-			writeXMLElement('Reply_Alt',	$topic->{AltReply})			if $topic->{Task};
-			writeXMLElement('Task',			$topic->{Task})				if $topic->{Task};
-			writeXMLElement('Task_Name',	nameTask($topic->{Task}))	if $topic->{Task};
-			writeXMLElementClose('Topic');
-		}
-		writeXMLElementClose('Topics');
-		#TODO: Walks
-		#TODO: Resource
 		#TODO: BattleStats
+		{	#Descriptions
+			#TODO: Resource
+			writeXMLElementOpen('Descriptions');
+			writeXMLElementOpen('Description');
+			writeXMLElement('Text',	$Persons[$person]{Description});
+			writeXMLElementClose('Description');
+			if($Persons[$person]{AltDescTask}){
+				writeXMLElementOpen('Description');
+				writeXMLElement('Text',		$Persons[$person]{AltDesc});
+				writeXMLElement('TaskID',	$Persons[$person]{AltDescTask});
+				writeXMLElement('TaskName',	nameTask($Persons[$person]{AltDescTask}));
+				writeXMLElementClose('Description');
+			}
+			writeXMLElementClose('Descriptions');
+		}
+		{	#Topics
+			writeXMLElementOpen('Topics');
+			foreach my $topic ( @{$Persons[$person]{Topics} } ){
+				writeXMLElementOpen('Topic');
+				writeXMLElement('Subject',		$topic->{Subject});
+				writeXMLElement('Reply',		$topic->{Reply});
+				writeXMLElement('Reply_Alt',	$topic->{AltReply})			if $topic->{Task};
+				writeXMLElement('Task',			$topic->{Task})				if $topic->{Task};
+				writeXMLElement('Task_Name',	nameTask($topic->{Task}))	if $topic->{Task};
+				writeXMLElementClose('Topic');
+			}
+			writeXMLElementClose('Topics');
+		}
+		#TODO: Walks
+		{	#Relations
+			my @task_relations	= ();
+			for my $task (1..$#Tasks){ push @task_relations, $task if defined $TaskPersons[$task][$person] }
+			my $relations	= @task_relations;
+			writeXMLElementOpen('Relations')	if $relations;
+			{	#Tasks
+				writeXMLElementOpen('Tasks')		if @task_relations;
+				for my $task (@task_relations) {
+					writeXMLElementOpen('Task');
+					writeXMLElement('ID', $task);
+					writeXMLElement('Name', nameTask($task));
+					writeXMLElementClose('Task');
+				}
+				writeXMLElementClose('Tasks')		if @task_relations;
+			}
+			writeXMLElementClose('Relations')	if $relations;
+		}
 		writeXMLElementClose('Person');
 	}
 	writeXMLElementClose('Persons')	if $#Persons;
@@ -1700,86 +2271,95 @@ sub generateXMLObjects(){
 	writeXMLElementOpen('Objects') if $#Objects;
 	for my $object (1 .. $#Objects){
 		writeXMLElementOpen('Object');
-		#Attributes
-		writeXMLElementOpen('Attributes');
-		writeXMLElement('ID',			$object);
-		writeXMLElement('Prefix',		$Objects[$object]{Prefix});
-		writeXMLElement('Short',		$Objects[$object]{Short});
-		writeXMLElement('Name',			nameObject($object));
-		foreach my $alias ( @{$Objects[$object]{Alias} } ){
-			writeXMLElement('Alias',	$alias) unless $alias eq '';
-		}
-		writeXMLElement('Type',			$Objects[$object]{Type})		if defined $Objects[$object]{Type};
-		writeXMLElement('Static')		if $Objects[$object]{Static};
-		writeXMLElement('Portable')		unless $Objects[$object]{Static};
-		writeXMLElement('Container')	if $Objects[$object]{Container};
-		writeXMLElement('Surface')		if $Objects[$object]{Surface};
-		writeXMLElement('Wearable')		if $Objects[$object]{Wearable};
-		writeXMLElement('SitStandable')	if $Objects[$object]{SitStandable};
-		writeXMLElement('Lieable')		if $Objects[$object]{Lieable};
-		writeXMLElement('Weapon')		if $Objects[$object]{Weapon};
-		writeXMLElement('Edible')		if $Objects[$object]{Edible};
-		writeXMLElement('Readable')		if $Objects[$object]{Readable};
-		writeXMLElement('ReadText',		$Objects[$object]{ReadText})	if defined $Objects[$object]{ReadText};
-		writeXMLElement('InitialPosition',	$Objects[$object]{InitialPosition});	#VERIFY
-		writeXMLElement('Capacity',		$Objects[$object]{Capacity});
-		writeXMLElement('SizeWeight',	$Objects[$object]{SizeWeight});
-		writeXMLElement('Openable',		$Objects[$object]{Openable});				#TODO: Translate
-		writeXMLElement('Key',			$Objects[$object]{Key})			if defined $Objects[$object]{Key};
-		writeXMLElement('InRoomDesc',	$Objects[$object]{InRoomDesc})	unless $Objects[$object]{InRoomDesc} eq '';
-		writeXMLElement('OnlyWhenNotMoved')		if $Objects[$object]{OnlyWhenNotMoved};
+		{	#Attributes
+			writeXMLElementOpen('Attributes');
+			writeXMLElement('ID',			$object);
+			writeXMLElement('Prefix',		$Objects[$object]{Prefix});
+			writeXMLElement('Short',		$Objects[$object]{Short});
+			writeXMLElement('Name',			nameObject($object));
+			foreach my $alias ( @{$Objects[$object]{Alias} } ){
+				writeXMLElement('Alias',	$alias) unless $alias eq '';
+			}
+			writeXMLElement('Type',			$Objects[$object]{Type})		if defined $Objects[$object]{Type};
+			writeXMLElement('Static')		if $Objects[$object]{Static};
+			writeXMLElement('Portable')		unless $Objects[$object]{Static};
+			writeXMLElement('Container')	if $Objects[$object]{Container};
+			writeXMLElement('Surface')		if $Objects[$object]{Surface};
+			writeXMLElement('Wearable')		if $Objects[$object]{Wearable};
+			writeXMLElement('SitStandable')	if $Objects[$object]{SitStandable};
+			writeXMLElement('Lieable')		if $Objects[$object]{Lieable};
+			writeXMLElement('Weapon')		if $Objects[$object]{Weapon};
+			writeXMLElement('Edible')		if $Objects[$object]{Edible};
+			writeXMLElement('Readable')		if $Objects[$object]{Readable};
+			writeXMLElement('ReadText',		$Objects[$object]{ReadText})	if defined $Objects[$object]{ReadText};
+			writeXMLElement('InitialPosition',	$Objects[$object]{InitialPosition});	#VERIFY
+			writeXMLElement('Capacity',		$Objects[$object]{Capacity});
+			writeXMLElement('SizeWeight',	$Objects[$object]{SizeWeight});
+			writeXMLElement('Openable',		$Objects[$object]{Openable});	#TODO: Translate
+			writeXMLElement('Key',			$Objects[$object]{Key})			if defined $Objects[$object]{Key};
+			writeXMLElement('InRoomDesc',	$Objects[$object]{InRoomDesc})	unless $Objects[$object]{InRoomDesc} eq '';
+			writeXMLElement('OnlyWhenNotMoved')		if $Objects[$object]{OnlyWhenNotMoved};
 #TODO: Resources, BattleStats
 #TODO: CurrentState, States, StateListed, ListFlag
-		writeXMLElementClose('Attributes');
-		#Location
-		writeXMLElementOpen('Location');
-		#0: No Rooms
-		if($Objects[$object]{WhereType} eq 0){
-			writeXMLElement('Nowhere');
+			writeXMLElementClose('Attributes');
 		}
-		#1: Single Room
-		#2: Some Rooms
-		if( $Objects[$object]{WhereType} eq 1 ||
-			$Objects[$object]{WhereType} eq 2){
-			my @rooms = @{ $Objects[$object]{Where} };
-			foreach my $room (@rooms){
-				writeXMLElement('Room', nameRoom($room));
+		{	#Location
+			writeXMLElementOpen('Location');
+			#0: No Rooms
+			writeXMLElement('Nowhere')	if $Objects[$object]{WhereType} eq 0;
+			#1-2: Specific Rooms
+			if( $Objects[$object]{WhereType} eq 1 or $Objects[$object]{WhereType} eq 2){
+				my @rooms = @{ $Objects[$object]{Where} };
+				foreach my $room (@rooms){ writeXMLElement('Room', nameRoom($room)) }
 			}
-		}
-		#3: All Rooms
-		if($Objects[$object]{WhereType} eq 3){
-			writeXMLElement('Everywhere');
-		}
-		#4: Bodypart
-		if($Objects[$object]{WhereType} eq 4){
-			writeXMLElement('Person', Person( $Objects[$object]{Parent} ));
-		}
-		#9: Portable
-		if($Objects[$object]{WhereType} eq 9){
-			if ($Objects[$object]{Parent} eq '-1') {
-				writeXMLElement('Nowhere');
+			#3: All Rooms
+			writeXMLElement('Everywhere') if $Objects[$object]{WhereType} eq 3;
+			#4: Bodypart
+			writeXMLElement('Person', namePerson( $Objects[$object]{Parent} )) if $Objects[$object]{WhereType} eq 4;
+			#9: Portable
+			if($Objects[$object]{WhereType} eq 9){
+				if ($Objects[$object]{Parent} eq '-1') {
+					writeXMLElement('Nowhere');
+				}
+				else{
+					writeXMLElement('Holder', nameObject( $ObjectHolder[ $Objects[$object]{Parent} ]));
+				}
 			}
-			else{
-				writeXMLElement('Holder', nameObject( $ObjectHolder[ $Objects[$object]{Parent} ]));
-			}
+			writeXMLElementClose('Location');
 		}
-		writeXMLElementClose('Location');
-		#Descriptions
-		writeXMLElementOpen('Descriptions');
-		writeXMLElementOpen('Description');
-		writeXMLElement('Text',	$Objects[$object]{Description});
-		writeXMLElementClose('Description');
-		if($Objects[$object]{AltDescTask}){
+		{	#Descriptions
+			writeXMLElementOpen('Descriptions');
 			writeXMLElementOpen('Description');
-			writeXMLElement('Text',	$Objects[$object]{AltDesc});
-			writeXMLElement('Type',	$Objects[$object]{AltDescType});
-			writeXMLElement('Task',	$Objects[$object]{AltDescTask});
-			writeXMLElement('Name',	nameTask($Objects[$object]{AltDescTask}));
+			writeXMLElement('Text',	$Objects[$object]{Description});
 			writeXMLElementClose('Description');
+			if($Objects[$object]{AltDescTask}){
+				writeXMLElementOpen('Description');
+				writeXMLElement('Text',	$Objects[$object]{AltDesc});
+				writeXMLElement('Type',	$Objects[$object]{AltDescType});
+				writeXMLElement('Task',	$Objects[$object]{AltDescTask});
+				writeXMLElement('Name',	nameTask($Objects[$object]{AltDescTask}));
+				writeXMLElementClose('Description');
+			}
+			writeXMLElementClose('Descriptions');
+			writeXMLElementClose('Object');
 		}
-		writeXMLElementClose('Descriptions');
-		writeXMLElementClose('Object');
-		#TODO: Related Tasks
+		{	#Relations
+			my @task_relations	= ();
+			for my $task (1..$#Tasks){ push @task_relations, $task if defined $ObjectTasks[$object][$task] }
+			my $relations	= @task_relations;
+			writeXMLElementOpen('Relations')	if $relations;
+			{	#Tasks
+				writeXMLElementOpen('Tasks')		if @task_relations;
+				for my $task (@task_relations) {
+					writeXMLElementOpen('Task');
+					writeXMLElement('ID', $task);
+					writeXMLElement('Name', nameTask($task));
+					writeXMLElementClose('Task');
+				}
+				writeXMLElementClose('Tasks')		if @task_relations;
+			}
+			writeXMLElementClose('Relations')	if $relations;
+		}
 	}
 	writeXMLElementClose('Objects') if $#Objects;
 }
@@ -1789,104 +2369,133 @@ sub generateXMLTasks(){
 	writeXMLElementOpen('Tasks') if $#Tasks;
 	for my $task (1 .. $#Tasks){
 		writeXMLElementOpen('Task');
-		#Attributes
-		writeXMLElementOpen('Attributes');
-		writeXMLElement('ID',			$task);
-		writeXMLElement('Name',			nameTask($task));
-		writeXMLElement('Repeatable')	if $Tasks[$task]{Repeatable};
-		writeXMLElement('Reversible')	if $Tasks[$task]{Reversible};
-		writeXMLElement('ShowRoomDesc',	nameRoom($Tasks[$task]{ShowRoomDesc})) unless $Tasks[$task]{ShowRoomDesc} eq 0;
-		writeXMLElementClose('Attributes');
-		#Messages
-		writeXMLElementOpen('Messages');
-		writeXMLElement('CompleteText',	$Tasks[$task]{CompleteText})	unless $Tasks[$task]{CompleteText} eq '';
-		writeXMLElement('RepeatText',	$Tasks[$task]{RepeatText})		unless $Tasks[$task]{RepeatText} eq '';
-		writeXMLElement('ReverseText',	$Tasks[$task]{ReverseText})		unless $Tasks[$task]{ReverseText} eq '';
-		writeXMLElement('ExtraText',	$Tasks[$task]{AdditionalText})	unless $Tasks[$task]{AdditionalText} eq '';
-		writeXMLElementClose('Messages');
-		#Commands
-		my @commands = @{ $Tasks[$task]{Commands} };
-		unless ($#commands eq -1){
+		{	#Attributes
+			writeXMLElementOpen('Attributes');
+			writeXMLElement('ID',			$task);
+			writeXMLElement('Name',			nameTask($task));
+			writeXMLElement('Title',		$Tasks[$task]{Name});
+			writeXMLElement('Type',			$Tasks[$task]{Type});
+			writeXMLElement('Repeatable')	if $Tasks[$task]{Repeatable};
+			writeXMLElement('Reversible')	if $Tasks[$task]{Reversible};
+			writeXMLElement('ShowRoomDesc',	nameRoom($Tasks[$task]{ShowRoomDesc})) unless $Tasks[$task]{ShowRoomDesc} eq 0;
+			writeXMLElementClose('Attributes');
+		}
+		{	#Commands
+			my @commands = @{ $Tasks[$task]{Commands} };
+			my @commandsReverse = @{ $Tasks[$task]{CommandsReverse} };
 			writeXMLElementOpen('Commands');
-			foreach my $command (@commands) {
-				writeXMLElement('Command',			$command);
-			}
+			foreach my $command (@commands) { writeXMLElement('Command', $command) }
+			foreach my $command (@commandsReverse) { writeXMLElement('Reverse', $command) }
 			writeXMLElementClose('Commands');
 		}
-		#Reverse-Commands
-		my @commandsReverse = @{ $Tasks[$task]{CommandsReverse} };
-		unless ($#commandsReverse eq -1){
-			writeXMLElementOpen('CommandsReverse');
-			foreach my $command (@commandsReverse) {
-				writeXMLElement('Command',			$command);
+		{	#Messages
+			writeXMLElementOpen('Messages');
+			writeXMLElement('CompleteText',	$Tasks[$task]{CompleteText})	unless $Tasks[$task]{CompleteText} eq '';
+			writeXMLElement('RepeatText',	$Tasks[$task]{RepeatText})		unless $Tasks[$task]{RepeatText} eq '';
+			writeXMLElement('ReverseText',	$Tasks[$task]{ReverseText})		unless $Tasks[$task]{ReverseText} eq '';
+			writeXMLElement('ExtraText',	$Tasks[$task]{AdditionalText})	unless $Tasks[$task]{AdditionalText} eq '';
+			writeXMLElementClose('Messages');
+		}
+		{	#Location
+			writeXMLElementOpen('Location');
+			#0: No Rooms
+			writeXMLElement('Nowhere')	if $Tasks[$task]{WhereType} eq 0;
+			#1-2: Specific Roomlist
+			if( $Tasks[$task]{WhereType} eq 1 or $Tasks[$task]{WhereType} eq 2){
+				my @rooms = @{ $Tasks[$task]{Where} };
+				foreach my $room (@rooms){ writeXMLElement('Room', nameRoom($room)) }
 			}
-			writeXMLElementClose('CommandsReverse');
+			#3: All Rooms
+			writeXMLElement('Everywhere')	if $Tasks[$task]{WhereType} eq 3;
+			writeXMLElementClose('Location');
 		}
-		#Location
-		writeXMLElementOpen('Location');
-		#0: No Rooms
-		if($Tasks[$task]{WhereType} eq 0){
-			writeXMLElement('Nowhere');
-		}
-		#1: Single Room
-		#2: Some Rooms
-		if( $Tasks[$task]{WhereType} eq 1 ||
-			$Tasks[$task]{WhereType} eq 2){
-			my @rooms = @{ $Tasks[$task]{Where} };
-			foreach my $room (@rooms){
-				writeXMLElement('Room', nameRoom($room));
+		{	#Help
+			unless ($Tasks[$task]{Question} eq ''){
+				writeXMLElementOpen('Help');
+				writeXMLElement('Question',		$Tasks[$task]{Question});
+				writeXMLElement('Hint1',		$Tasks[$task]{Hint1});
+				writeXMLElement('Hint2',		$Tasks[$task]{Hint2});
+				writeXMLElementClose('Help');
 			}
 		}
-		#3: All Rooms
-		if($Tasks[$task]{WhereType} eq 3){
-			writeXMLElement('Everywhere');
-		}
-		writeXMLElementClose('Location');
-		#Help
-		unless ($Tasks[$task]{Question} eq ''){
-			writeXMLElementOpen('Help');
-			writeXMLElement('Question',		$Tasks[$task]{Question});
-			writeXMLElement('Hint1',		$Tasks[$task]{Hint1});
-			writeXMLElement('Hint2',		$Tasks[$task]{Hint2});
-			writeXMLElementClose('Help');
-		}
-		#Restrictions
-		my @restrictions = @{ $Tasks[$task]{Restrictions} };
-		unless ($#restrictions eq -1){
-			writeXMLElementOpen('Restrictions');
-			foreach my $reference (@restrictions) {
-				my %restriction = %{ $reference };
-				writeXMLElementOpen('Restriction');
-				writeXMLElement('Condition',	$restriction{Condition})if defined $restriction{Condition};
-				writeXMLElement('FailureText',	$restriction{FailureText});
-				#TODO: Translate these in the parsing, remove raw dump when all are translated.
-				writeXMLElement('Type',			$restriction{Type});
-				writeXMLElement('Var1',			$restriction{Var1})		if defined $restriction{Var1};
-				writeXMLElement('Var2',			$restriction{Var2})		if defined $restriction{Var2};
-				writeXMLElement('Var3',			$restriction{Var3})		if defined $restriction{Var3};
-				writeXMLElement('Var4',			$restriction{Var4})		if defined $restriction{Var4};
-				writeXMLElementClose('Restriction');
+		{	#Restrictions
+			my @restrictions = @{ $Tasks[$task]{Restrictions} };
+			unless ($#restrictions eq -1){
+				writeXMLElementOpen('Restrictions');
+				foreach my $reference (@restrictions) {
+					my %restriction = %{ $reference };
+					writeXMLElementOpen('Restriction');
+					writeXMLElement('Condition',	$restriction{Condition})if defined $restriction{Condition};
+					writeXMLElement('FailureText',	$restriction{FailureText});
+					writeXMLElementClose('Restriction');
+				}
+				writeXMLElementClose('Restrictions');
 			}
-			writeXMLElementClose('Restrictions');
 		}
-		#Actions		TODO
-		my @actions = @{ $Tasks[$task]{Actions} };
-		unless ($#actions eq -1){
-			writeXMLElementOpen('Actions');
-			foreach my $reference (@actions) {
-				my %action = %{ $reference };
-				writeXMLElementOpen('Action');
-				writeXMLElement('Text',			$action{Text})		if defined $action{Text};
-				#TODO: Translate these in the parsing, remove raw dump when all are translated.
-				writeXMLElement('Type',			$action{Type});
-				writeXMLElement('Var1',			$action{Var1})		if defined $action{Var1};
-				writeXMLElement('Var2',			$action{Var2})		if defined $action{Var2};
-				writeXMLElement('Var3',			$action{Var3})		if defined $action{Var3};
-				writeXMLElement('Var5',			$action{Expr})		if defined $action{Expr};
-				writeXMLElement('Var5',			$action{Var5})		if defined $action{Var5};
-				writeXMLElementClose('Action');
+		{	#Actions
+			my @actions = @{ $Tasks[$task]{Actions} };
+			if (@actions){
+				writeXMLElementOpen('Actions');
+				foreach my $reference (@actions) {
+					my %action = %{ $reference };
+					writeXMLElement('Action',	$action{Text});
+				}
+				writeXMLElementClose('Actions');
 			}
-			writeXMLElementClose('Actions');
+		}
+		{	#Relations
+			my @room_relations	= ();
+			for my $room (1..$#Rooms){ push @room_relations, $room if defined $RoomTasks[$room][$task] }
+			my @object_relations	= ();
+			for my $object (1..$#Objects){ push @object_relations, $object if defined $ObjectTasks[$object][$task] }
+			my @person_relations	= ();
+			for my $person (1..$#Persons){ push @person_relations, $person if defined $TaskPersons[$task][$person] }
+			my @variable_relations	= ();
+			for my $variable (1..$#Variables){ push @variable_relations, $variable if defined $TaskVariables[$task][$variable] }
+			
+			my $relations	= @room_relations + @object_relations + @person_relations + @variable_relations;
+			writeXMLElementOpen('Relations')	if $relations;
+			{	#Rooms
+				writeXMLElementOpen('Rooms')		if @room_relations;
+				for my $room (@room_relations) {
+					writeXMLElementOpen('Room');
+					writeXMLElement('ID', $room);
+					writeXMLElement('Name', nameRoom($room));
+					writeXMLElementClose('Room');
+				}
+				writeXMLElementClose('Rooms')		if @room_relations;
+			}
+			{	#Objects
+				writeXMLElementOpen('Objects')		if @object_relations;
+				for my $object (@object_relations) {
+					writeXMLElementOpen('Object');
+					writeXMLElement('ID', $object);
+					writeXMLElement('Name', nameObject($object));
+					writeXMLElementClose('Object');
+				}
+				writeXMLElementClose('Objects')		if @object_relations;
+			}
+			{	#Persons
+				writeXMLElementOpen('Persons')		if @person_relations;
+				for my $person (@person_relations) {
+					writeXMLElementOpen('Person');
+					writeXMLElement('ID', $person);
+					writeXMLElement('Name', namePerson($person));
+					writeXMLElementClose('Person');
+				}
+				writeXMLElementClose('Persons')		if @person_relations;
+			}
+			{	#Variables
+				writeXMLElementOpen('Variables')		if @variable_relations;
+				for my $variable (@variable_relations) {
+					writeXMLElementOpen('Variable');
+					writeXMLElement('ID', $variable);
+					writeXMLElement('Name', nameVariable($variable));
+					writeXMLElementClose('Variable');
+				}
+				writeXMLElementClose('Variables')		if @variable_relations;
+			}
+			writeXMLElementClose('Relations')	if $relations;
 		}
 		writeXMLElementClose('Task');
 	}
@@ -1898,14 +2507,31 @@ sub generateXMLVariables(){
 	writeXMLElementOpen('Variables') if $#Variables;
 	for my $variable (1 .. $#Variables){
 		writeXMLElementOpen('Variable');
-		#Attributes
-		writeXMLElementOpen('Attributes');
-		writeXMLElement('ID',			$variable);
-		writeXMLElement('Name',			$Variables[$variable]{Name});
-		writeXMLElement('Type',			$Variables[$variable]{Type});
-		writeXMLElement('Value',		$Variables[$variable]{Value});
-		writeXMLElementClose('Attributes');
-		#TODO: Related Tasks / ALRs
+		{	#Attributes
+			writeXMLElementOpen('Attributes');
+			writeXMLElement('ID',			$variable);
+			writeXMLElement('Name',			$Variables[$variable]{Name});
+			writeXMLElement('Type',			$Variables[$variable]{Type});
+			writeXMLElement('Value',		$Variables[$variable]{Value});
+			writeXMLElementClose('Attributes');
+		}
+		{	#Relations
+			my @task_relations	= ();
+			for my $task (1..$#Tasks){ push @task_relations, $task if defined $TaskVariables[$task][$variable] }
+			my $relations	= @task_relations;
+			writeXMLElementOpen('Relations')	if $relations;
+			{	#Tasks
+				writeXMLElementOpen('Tasks')		if @task_relations;
+				for my $task (@task_relations) {
+					writeXMLElementOpen('Task');
+					writeXMLElement('ID', $task);
+					writeXMLElement('Name', nameTask($task));
+					writeXMLElementClose('Task');
+				}
+				writeXMLElementClose('Tasks')		if @task_relations;
+			}
+			writeXMLElementClose('Relations')	if $relations;
+		}
 		writeXMLElementClose('Variable');
 	}
 	writeXMLElementClose('Variables');
@@ -1958,8 +2584,8 @@ sub generateInform(){
 	print $File_Log "Printing Natural Inform File\n";
 	generateInformIntro();
 	#Start off with the first Volume
-	print $File_Inform "\nVolume 1 - Act I\n\n";
-	generateInformGeology();
+	print $File_Inform "\nVolume 1 - Act I\n";
+	generateInformLocations();
 	generateInformInhabitants();
 	generateInformMechanics();
 	generateInformChronology();
@@ -2026,11 +2652,57 @@ sub generateInformIntro(){
 	print $File_Inform "\nPart 0.3.3 - Math\n\n";
 	print $File_Inform "To decide if (X - A number) is between (low - a number) and (high - a number):\n\tIf X >= low and X <= high, decide yes;\n\tDecide no;\n";
 }
-#Generate the geology book of the Inform file
-sub generateInformGeology(){
-	print $File_Inform "\nBook 1.1 - Geology\n\n";
+#Generate the locations book of the Inform file
+sub generateInformLocations(){
+	print $File_Inform "\nBook 1.1 - Locations\n\n";
 	print $File_Inform "[The locations for the story, divided into one parts for each distinct region with chapters for each room.]\n";
+	print $File_Inform "\nPart 1.1.1 - Main Region\n";
+	generateInformRoomRecursive($Game{Start});
+	#TODO Look for unprinted rooms, create a new region for each and add the rooms
 }
+#Generate a room in the Inform output, then recurse through all the exits
+sub generateInformRoomRecursive($);
+sub generateInformRoomRecursive($){
+	my $room	= shift;
+	#Check if room is generated
+	return if defined $Rooms[$room]{i7generated};
+	$Rooms[$room]{i7generated}	= 1;
+	#Loop through compass directions to find all exits to the room, sorting into unvisited to recurse to and relations to existing rooms.
+	my @unvisited	= ();
+	my $relations	= 'is ';
+	#TODO: For now we assume that all exits are bi-directional
+	foreach my $direction (0..$#Compass_Direction){
+		my $destination	= $Rooms[$room]{Exits}[$direction]{Destination};
+		if ($destination){
+			#TODO: We don't take task restrictions into account
+			if (defined $Rooms[$destination]{i7generated}){
+				#Destination is generated; add to relations
+				$relations .= ' and '	unless $relations eq 'is ';
+				$relations .= $Compass_Reversed[$direction] . ' ' . nameRoom($destination);
+			}
+			else {
+				#Destination is not generated, add to recursion list
+				push @unvisited, $destination;
+			}
+		}
+	}
+	#Declare as a room if there are no relations
+	$relations .= 'a room'	if $relations eq 'is ';
+	#Print out the room
+	print $File_Inform "\nChapter - $Rooms[$room]{Title}\n\n";
+	print $File_Inform "[Room$room]\n";
+	print $File_Inform nameRoom($room) . " $relations.\n";
+	print $File_Inform "The printed name is \"$Rooms[$room]{Title}\".\n" unless nameRoom($room) eq $Rooms[$room]{Title};
+	#TODO: Alternate descriptions
+	print $File_Inform "\"$Rooms[$room]{Description}\".\n";
+	#TODO: Room Contents
+	#TODO: Movement Restrictions
+	#Call recursive generation of unvisited rooms
+	foreach my $destination (@unvisited){ generateInformRoomRecursive($destination) }
+	#TODO: Section - Contents
+	#TODO: Section - Movement Restrictions
+}
+
 #Generate the inhabitant book of the Inform file
 sub generateInformInhabitants(){
 	print $File_Inform "\nBook 1.2 - Inhabitants\n\n";
@@ -2140,18 +2812,19 @@ close($File_Decompiled) if defined $Option_Rawdump;
 #preloadConstants();							# Populate arrays with constants
 print "Analyzing...\n";
 parseFile();									# Parse the input file into the local data structures
-#parseMapping() if defined $FileName_Mapping;	# Read symbol file if called for
+#TODO	parseMapping() if defined $FileName_Mapping;	# Read symbol file if called for
 open($File_Mapping, "> :raw :bytes", $FileName_Path . $FileName_Generate)
 	|| die "$0: can't open " . $FileName_Path . $FileName_Generate . "for writing: $!"
 	if defined $Option_Generate;
 translate();
 analyze();
-close($File_Mapping) if defined $Option_Generate;
 print "Writing results...\n";
 open($File_Inform, "> :raw :bytes", $FileName_Path . $FileName_Inform)
 	or die "$0: can't open $FileName_Path$FileName_Inform for writing: $!";
 open($File_XML, "> :raw :bytes", $FileName_Path . $FileName_XML)
 	or die "$0: can't open $FileName_Path$FileName_XML for writing: $!";
+writeMapping()		 if defined $Option_Generate;
+close($File_Mapping) if defined $Option_Generate;
 printSource();
 #Close file output
 close($File_Inform);
