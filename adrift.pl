@@ -10,7 +10,7 @@ use Carp;					# For stack tracing at errors
 my $Time_Start	= time();	# Epoch time for start of processing
 
 ##Version History
-my $Decompiler_Version		= '0.11';
+my $Decompiler_Version		= '0.12';
 #v0.1:	Initial structure for flow and storage
 #v0.2:	Signature parsing, inflation/decryption of source
 #v0.3:	Raw dump
@@ -22,65 +22,34 @@ my $Decompiler_Version		= '0.11';
 #v0.9:	Parse synonyms, variables and ALRs
 #v0.10: Improved output to XML and Inform
 #v0.11:	Improved parsing of actions and restrictions
+#v0.12:	Code restructuring
 
+##Global Variables
+#Story Settings
+my $Compiler_Version;		# The version used to compile the storyfile
 
-##Global variables##
-#File handling
-my $FileName_Compiled;		# Filename for the compiled gamefile to decompile
-my $FileName_Path;			# Path to place output files in
-my $FileName_Log;			# Filename for the log
-my $FileName_Mapping;		# Filename for the mapping/translation file, if any.
-my $FileName_Generate;		# Filename for the generated mapping file
-my $FileName_Decompiled;	# Filename for the decompiled sourcecode
-my $FileName_Inform;		# Filename for the Inform output
-my $FileName_XML;			# Filename for the XML output
-my $File_Compiled;			# File handle for input compiled gamefile
-my $File_Log;				# File handle for logging output
-my $File_Mapping;			# File handle for name mapping
-my $File_Decompiled;		# File handle for output decompiled sourcecode
-my $File_Inform;			# File handle for Inform output
-my $File_XML;				# File handle for XML output
-my $File_XML_Indent	= -1;	# Storing the indentation level of the XML file
+#Story Data
+my %Story;
+my @Rooms 			= ( undef );	# Contains the room objects for the story, starting from ID 1
+my @Objects 		= ( undef );	# Contains the 'object' objects for the story, starting from ID 1
+my @Tasks	 		= ( undef );	# Contains the task objects for the story, starting from ID 1
+my @Events	 		= ( undef );	# Contains the event objects for the story, starting from ID 1
+my @Persons	 		= ( undef );	# Contains the person objects for the story, starting from ID 1
+my @Groups	 		= ( undef );	# Contains the room group objects for the story, starting from ID 1
+my @Synonyms 		= ( undef );	# Contains the synonym objects for the story, starting from ID 1
+my @Variables 		= ( undef );	# Contains the variable objects for the story, starting from ID 1
+my @ALRs 			= ( undef );	# Contains the ALR objects for the story, starting from ID 1
 
-#Input
-my @Lines;					# Stores the lines which form the basis of ADRIFT files
-my $Lines_Next;				# Index of next entry in @Lines
+#Object mappings
+my @ObjectStatic		= ( 0 );	# Mapping from static object ID to actual object ID
+my @ObjectPortable		= ( 0 );	# Mapping from non-static object ID to actual object ID
+my @ObjectOpenable		= ( 0 );	# Mapping from openable object ID to actual object ID
+my @ObjectContainer		= ( 0 );	# Mapping from container object ID to actual object ID
+my @ObjectSurface		= ( 0 );	# Mapping from surface object ID to actual object ID
+my @ObjectHolder		= ( 0 );	# Mapping from holder/parent object ID to actual object ID
+my @ObjectLieable		= ( 0 );	# Mapping from lieable object ID to actual object ID
+my @ObjectSitStandable	= ( 0 );	# Mapping from sit/standable object ID to actual object ID
 
-#Option handling
-my $Option_Minimal;		# Skip output directory and embedded resources
-my $Option_Generate;	# Generate a new symbol file
-my $Option_Verbose;		# Extra information dumped to story file
-my $Option_Rawdump;		# Dump raw decompiled source
-my $Option_Naming;		# Be extra aggressive on trying to determine names
-						# TODO: This will create duplicate names, remake to avoid that
-my $Options	= "Available Options:\n";
-$Options	.= "-m\t\tMinimalist mode: Skip resources and output directory\n";
-$Options	.= "-v\t\tVerbose: Extra information printed to log\n";
-$Options	.= "-a\t\tAggressive naming: Try extra hard to find names of objects and properties\n";
-$Options	.= "+s\t\tGenerate symbol file: Store symbol mapping in output directory\n";
-$Options	.= "-s [file]:\tSymbol file: Parse the file for symbol mappings\n";
-$Options	.= "+r\t\tRaw dump of decompiled source\n";
-
-#Constants
-my $Signature_Size	= 14;
-my $Signature_Extra	= 8;
-my $Signature_Base	= chr(0x3c).chr(0x42).chr(0x3f).chr(0xc9).chr(0x6a).chr(0x87).chr(0xc2).chr(0xcf);
-my $Signature_v4	= $Signature_Base.chr(0x93).chr(0x45).chr(0x3e).chr(0x61).chr(0x39).chr(0xfa);
-my $Signature_v39	= $Signature_Base.chr(0x94).chr(0x45).chr(0x37).chr(0x61).chr(0x39).chr(0xfa);
-my $Signature_v38	= $Signature_Base.chr(0x94).chr(0x45).chr(0x36).chr(0x61).chr(0x39).chr(0xfa);
-
-#Game Details
-my $Gamefile_Version;
-my %Game;
-my @Rooms 			= ( undef );	# Contains the room objects from the game, starting from ID 1
-my @Objects 		= ( undef );	# Contains the 'object' objects from the game, starting from ID 1
-my @Tasks	 		= ( undef );	# Contains the task objects from the game, starting from ID 1
-my @Events	 		= ( undef );	# Contains the event objects from the game, starting from ID 1
-my @Persons	 		= ( undef );	# Contains the person objects from the game, starting from ID 1
-my @Groups	 		= ( undef );	# Contains the room group objects from the game, starting from ID 1
-my @Synonyms 		= ( undef );	# Contains the synonym objects from the game, starting from ID 1
-my @Variables 		= ( undef );	# Contains the variable objects from the game, starting from ID 1
-my @ALRs 			= ( undef );	# Contains the ALR objects from the game, starting from ID 1
 #Relationships
 my @RoomTasks		= ();
 my @ObjectTasks		= ();
@@ -88,536 +57,634 @@ my @TaskPersons		= ();
 my @TaskGroups		= ();
 my @TaskVariables	= ();
 
-##Translation
-#Translation Mappings
-my @Translate_Room;					# Translation names for rooms
-my @Translate_Object;				# Translation names for 'objects'
-my @Translate_Task;					# Translation names for tasks
-my @Translate_Event;				# Translation names for event
-my @Translate_Person;				# Translation names for persons
-my @Translate_Group;				# Translation names for room groups
-my @Translate_Variable;				# Translation names for variables
-#Object mappings - VERIFY if some of these start at 0
-my @ObjectStatic		= ( 0 );	# Mapping from static object ID to actual object ID
-my @ObjectPortable		= ( 0 );	# Mapping from non-static object ID to actual object ID
-my @ObjectOpenable		= ( 0 );	# Mapping from openable object ID to actual object ID; VERIFY Starts at 0.
-my @ObjectContainer		= ( 0 );	# Mapping from container object ID to actual object ID; VERIFY Starts at 0 
-my @ObjectSurface		= ( 0 );	# Mapping from surface object ID to actual object ID; VERIFY Starts at 0.
-my @ObjectHolder		= ( 0 );	# Mapping from holder/parent object ID to actual object ID; VERIFY Starts at 0.
-my @ObjectLieable		= ( 0 );	# Mapping from lieable object ID to actual object ID
-my @ObjectSitStandable	= ( 0 );	# Mapping from sit/standable object ID to actual object ID
-#Static mappings
-my @Compass_Direction;				# Names of the compass directions, populated by loadCompass
-my @Compass_Reversed;				# Names of the reversed compass directions, populated by loadCompass
-my @Gender;
+#Symbol Translation Names
+my @Symbol_Room;					# Translation names for rooms
+my @Symbol_Object;					# Translation names for 'objects'
+my @Symbol_Task;					# Translation names for tasks
+my @Symbol_Event;					# Translation names for event
+my @Symbol_Person;					# Translation names for persons
+my @Symbol_Group;					# Translation names for room groups
+my @Symbol_Variable;				# Translation names for variables
 
-#Namings
-sub nameRoom($){
-	my $id	= shift;
-	return 'UnknownRoom'			unless defined $id;
-	return $Translate_Room[$id]		if defined $Translate_Room[$id];
-	return "Room$id";
-}
-sub nameObject($){
-	my $id	= shift;
-	return 'UnknownObject'			unless defined $id;
-	return $Translate_Object[$id]	if defined $Translate_Object[$id];
-	return "Object$id";
-}
-sub nameTask($){
-	my $id	= shift;
-	return 'UnknownTask'			unless defined $id;
-	return $Translate_Task[$id]		if defined $Translate_Task[$id];
-	return "Task$id";
-}
-sub nameEvent($){
-	my $id	= shift;
-	return 'UnknownEvent'			unless defined $id;
-	return $Translate_Event[$id]	if defined $Translate_Event[$id];
-	return "Event$id";
-}
-sub namePerson($){
-	my $id	= shift;
-	return 'UnknownPerson'			unless defined $id;
-	return $Translate_Person[$id]	if defined $Translate_Person[$id];
-	return "Person$id";
-}
-sub nameGroup($){
-	my $id	= shift;
-	return 'UnknownGroup'			unless defined $id;
-	return $Translate_Group[$id]	if defined $Translate_Group[$id];
-	return "Group$id";
-}
-sub nameVariable($){
-	my $id	= shift;
-	return 'UnknownVariable'			unless defined $id;
-	return $Translate_Variable[$id]	if defined $Translate_Variable[$id];
-	return "Variable$id";
-}
-sub nameGender($){
-	my $id	= shift;
-	return 'UnknownGender'			unless defined $id;
-	return $Gender[$id]				if defined $Gender[$id];
-	print $File_Log "WARNING: Unknown gender ID=$id\n";
-	return "person";
-}
-#Mapping File Handling
+#Static Symbol Names
+my @Symbol_Compass_Direction;		# Names of the compass directions
+my @Symbol_Compass_Reversed;		# Names of the reversed compass directions
+my @Symbol_Gender;
 
 #Constants
-sub loadConstants(){
-	#Compass directions; dependant on the ExpandedCompass global
-	$Compass_Direction[0]	= 'North';
-	$Compass_Direction[1]	= 'East';
-	$Compass_Direction[2]	= 'South';
-	$Compass_Direction[3]	= 'West';
-	$Compass_Direction[4]	= 'Up';
-	$Compass_Direction[5]	= 'Down';
-	$Compass_Direction[6]	= 'Inside';
-	$Compass_Direction[7]	= 'Outside';
-	$Compass_Direction[8]	= 'Northeast'		if $Game{ExpandedCompass};
-	$Compass_Direction[9]	= 'Southeast'		if $Game{ExpandedCompass};
-	$Compass_Direction[10]	= 'Southwest'		if $Game{ExpandedCompass};
-	$Compass_Direction[11]	= 'Northwest'		if $Game{ExpandedCompass};
-	$Compass_Reversed[0]	= 'south of';
-	$Compass_Reversed[1]	= 'west of';
-	$Compass_Reversed[2]	= 'north of';
-	$Compass_Reversed[3]	= 'east of';
-	$Compass_Reversed[4]	= 'down from';
-	$Compass_Reversed[5]	= 'up from';
-	$Compass_Reversed[6]	= 'outside from';
-	$Compass_Reversed[7]	= 'inside from';
-	$Compass_Reversed[8]	= 'southwest of'	if $Game{ExpandedCompass};
-	$Compass_Reversed[9]	= 'northwest of'	if $Game{ExpandedCompass};
-	$Compass_Reversed[10]	= 'northeast of'	if $Game{ExpandedCompass};
-	$Compass_Reversed[11]	= 'southeast of'	if $Game{ExpandedCompass};
-	#Gender names
-	$Gender[0]	= 'man';
-	$Gender[1]	= 'woman';
-}
+my %Signature		= ();
+$Signature{Size}	= 14;
+$Signature{Extra}	= 8;
+$Signature{Base}	= chr(0x3c).chr(0x42).chr(0x3f).chr(0xc9).chr(0x6a).chr(0x87).chr(0xc2).chr(0xcf);
+$Signature{V400}	= $Signature{Base}.chr(0x93).chr(0x45).chr(0x3e).chr(0x61).chr(0x39).chr(0xfa);
+$Signature{V390}	= $Signature{Base}.chr(0x94).chr(0x45).chr(0x37).chr(0x61).chr(0x39).chr(0xfa);
+$Signature{V380}	= $Signature{Base}.chr(0x94).chr(0x45).chr(0x36).chr(0x61).chr(0x39).chr(0xfa);
+my %PRNG			= ();
+$PRNG{Constant1} 	= 0x43fd43fd;
+$PRNG{Constant2} 	= 0x00c39ec3;
+$PRNG{Constant3} 	= 0x00ffffff;
+$PRNG{Initial}		= 0x00a09e86;
+$PRNG{State}		= 0x00a09e86;
 
-##File Handling
-#The next Single-Line Value
-sub nextSLV(){
+#File handling
+my $FileName_Compiled;		# Filename for the compiled gamefile to decompile
+my $FileName_Path	= './';	# Path to place output files in
+my $FileName_Decompiled;	# Filename for the decompiled sourcecode
+my $FileName_Log;			# Filename for the log
+my $FileName_Symbol;		# Filename for the symbol mapping translation input file
+my $FileName_Symbol_Gen;	# Filename for the symbol mapping translation output file
+my $FileName_I7;			# Filename for the Inform output
+my $FileName_XML;			# Filename for the XML output
+my $File_Compiled;			# File handle for input compiled gamefile
+my $File_Log;				# File handle for logging output
+my $File_Decompiled;		# File handle for output decompiled sourcecode
+my $File_Symbol;			# File handle for symbol mapping translation (both input and output)
+my $File_I7;				# File handle for Inform output
+my $File_XML;				# File handle for XML output
+my $File_XML_Indent	= -1;	# Storing the indentation level of the XML file
+my $Contents_Compiled;		# File contents
+
+#Decompiling Options; see parseArguments()
+my $Options	= "Decompiling Options:\n";
+my $Option_Minimal;		# Skip output directory and embedded resources
+$Options	.= "-m\t\tMinimalist mode, skipping output directory and resources\n";
+my $Option_Verbose;		# Extra information dumped to story file
+$Options	.= "-v\t\tVerbose loging output\n";
+my $Option_Naming;		# Be extra aggressive on trying to determine names
+						# TODO: This will create duplicate names, remake to avoid that
+$Options	.= "-a\t\tAggressive naming of objects and properties\n";
+my $Option_Rawdump;		# Dump raw decompiled source
+$Options	.= "+r\t\tRaw dump of decompiled source\n";
+my $Option_Generate;	# Generate a new symbol file
+$Options	.= "+s\t\tGenerate symbol translation file in output directory\n";
+$Options	.= "-s [file]:\tSymbol translation file\n";
+
+#Utility functions to access ADRIFTs line-oriented structure
+my @Lines;					# Stores the lines which form the basis of ADRIFT files
+my $Lines_Next;				# Index of next entry in @Lines
+my $Terminator;				# String indicating end of multi-line value
+#Next single-line value
+sub nextLine(){
 	return $Lines[$Lines_Next++];
 }
-#The next Multi-Line Value
-sub nextMLV(){
-	my $block;
-	my $terminated;
-	my $terminator;
-	$terminator		= chr( 42).chr( 42)	if $Gamefile_Version eq '3.80';
-	$terminator		= chr( 42).chr( 42)	if $Gamefile_Version eq '3.90';
-	$terminator		= chr(189).chr(208)	if $Gamefile_Version eq '4.00';
+#Next multi-line value
+sub nextMulti(){
+	my $multi;
 	do {
-		my $line	= nextSLV();
-		$terminated	= 1			if $terminator eq substr ($line, -2);
-		$block		.= "\n"		if defined $block;
-		$block		.=  $line;
-	} until defined $terminated;
-	return $block;
+		$multi		.= "\n"		if defined $multi;
+		$multi		.=  nextLine();
+	} until $Terminator eq substr ($multi, - length($Terminator));
+	return $multi;
 }
-#PRNG/Decryption
-my $PRNG_CST1 		= 0x43fd43fd;
-my $PRNG_CST2 		= 0x00c39ec3;
-my $PRNG_CST3 		= 0x00ffffff;
-my $PRNG_INITIAL	= 0x00a09e86;
-my $PRNG_STATE		= 0x00a09e86;
 #Generate the next value of the PRNG
-sub nextPRNG(){
-	$PRNG_STATE = ($PRNG_STATE * $PRNG_CST1 + $PRNG_CST2) & $PRNG_CST3;
-	return (255 * $PRNG_STATE) / ($PRNG_CST3 + 1);
+sub nextRandom(){
+	$PRNG{State} = ($PRNG{State} * $PRNG{Constant1} + $PRNG{Constant2}) & $PRNG{Constant3};
+	return (255 * $PRNG{State}) / ($PRNG{Constant3} + 1);
 }
-#Read in the file, using signature to determine version
-sub readFile(){
-	my $block_signature;
-	my $bytes_read = read ($File_Compiled, $block_signature, $Signature_Size);
-	die 'Unable to read file signature' unless $bytes_read eq $Signature_Size;
-	if ($block_signature eq $Signature_v4){
-		$Gamefile_Version	= '4.00';
-		inflateFile();
+##Initialization
+sub initialize(){
+	#Parse arguments;
+	parseArguments();
+	#There should be only one argument left, giving the name of the file to parse.
+	die "Use: adrift [options] story.taf\n$Options" unless ($#ARGV eq 0);
+	$FileName_Compiled	= $ARGV[0];
+	if ($FileName_Compiled	=~ m/([-_\w\s]*)\.(taf)/i) {
+	#When input file has a recognized extension, use the name of the file
+		$FileName_Path			= $1 . '/'	unless defined $Option_Minimal;
+		$FileName_Log			= $1 . '.log';
+		$FileName_Decompiled	= $1 . '.src';
+		$FileName_XML			= $1 . '.xml';
+		$FileName_I7			= $1 . '.ni';
+		$FileName_Symbol_Gen	= $1 . '.sym'	if defined $Option_Generate;
 	}
-	if ($block_signature eq $Signature_v39){
-		$Gamefile_Version	= '3.90';
-		decryptFile();
+	else{
+	#Otherwise decide on input agnostic file names
+		$FileName_Path			= 'decompiled/'	unless defined $Option_Minimal;
+		$FileName_Log			= 'story.log';
+		$FileName_Decompiled	= 'story.src';
+		$FileName_XML			= 'story.xml';
+		$FileName_I7			= 'story.ni';
+		$FileName_Symbol_Gen	= 'story.sym'	if defined $Option_Generate;
 	}
-	if ($block_signature eq $Signature_v38){
-		$Gamefile_Version	= '3.80';
-		decryptFile();
-	}
-	die 'Unable to determine version' unless defined $Gamefile_Version;
+	openFiles();
 }
-#Decrypt a file using PRNG, for v3.X0
-sub decryptFile(){
-	#Read in encrypted file
-	my $encrypted			= read_file ( $FileName_Compiled, binmode => ':raw' );
-	#Generate decryption mask
-	my $size				= length($encrypted);
-	my $mask				= '';
-	for (1 .. $size) { $mask .= chr(nextPRNG()) }
-	#Decrypt
-	my $decrypted			= $encrypted ^ $mask;
-	print $File_Decompiled $decrypted if defined $Option_Rawdump;
+sub parseArguments(){
+	while (defined $ARGV[0]) {
+		if	 ($ARGV[0] eq '-m') {	# Minimalist mode
+			$Option_Minimal	= 1;
+			splice(@ARGV, 0, 1);
+		}
+		elsif($ARGV[0] eq '-v') {	#Verbose logging
+			$Option_Verbose = 1;
+			splice(@ARGV, 0, 1);
+		}
+		elsif($ARGV[0] eq '-a') {	#Aggressive naming search
+			$Option_Naming	= 1;
+			splice(@ARGV, 0, 1);
+		}
+		elsif($ARGV[0] eq '-s') {	#Read symbol mapping file
+			$FileName_Symbol	= $ARGV[1];
+			splice(@ARGV, 0, 2);
+		}
+		elsif($ARGV[0] eq '+s') {	#Generate symbol mapping file template
+			$Option_Generate	= 1;
+			splice(@ARGV, 0, 1);
+		}
+		elsif($#ARGV >= 0 && $ARGV[0] eq '-a') {		
+			$Option_Naming		= 1;
+			splice(@ARGV, 0, 1);
+		}
+		elsif($#ARGV >= 0 && $ARGV[0] eq '+r') {		# Rawdump mode
+			$Option_Rawdump		= 1;
+			splice(@ARGV, 0, 1);
+		}
+		else{ last }
+	}
+}
+#Open file handles
+sub openFiles(){
+	#Determine filenames to use
+	#Create path as needed
+	mkdir $FileName_Path						unless -e $FileName_Path;
+	die "$FileName_Path is not a valid path"	unless -d $FileName_Path;
+	#Open log; use :unix to flush as we write to it
+	open($File_Log, "> :raw :bytes :unix", $FileName_Path . $FileName_Log)
+		or die "$0: can't open $FileName_Path$FileName_Log for writing: $!";
+	#Open compiled file with some sanity checking
+	die "$FileName_Compiled is not a valid file"	unless -f $FileName_Compiled;
+	open($File_Compiled, "< :raw :bytes", $FileName_Compiled)
+		or die("Couldn't open $FileName_Compiled for reading: $!");
+	#Open symbol mapping file if defined
+	open($File_Symbol, "< :raw :bytes", $FileName_Symbol)
+		|| die("Couldn't open $FileName_Symbol for reading.")
+		if defined $FileName_Symbol;
+	#Open generated output files
+	open($File_Decompiled, "> :raw :bytes", $FileName_Path . $FileName_Decompiled)
+		or die "$0: can't open $FileName_Path$FileName_Decompiled for writing: $!";
+	open($File_I7, "> :raw :bytes", $FileName_Path . $FileName_I7)
+		or die "$0: can't open $FileName_Path$FileName_I7 for writing: $!";
+	open($File_XML, "> :raw :bytes", $FileName_Path . $FileName_XML)
+		or die "$0: can't open $FileName_Path$FileName_XML for writing: $!";
+	#Open mapping file with some sanity checking
+	die "Overwriting existing symbol file with autogenerated is not supported in minimal mode"
+		if defined $FileName_Symbol_Gen && $Option_Minimal && -e $FileName_Symbol_Gen;
+}
+#Determine compiler version by reading the story header
+sub determineVersion(){
+	my $signature_file;
+	my $bytes_read = read ($File_Compiled, $signature_file, $Signature{Size});
+	die 'Unable to read file signature'	unless $bytes_read eq $Signature{Size};
+	$Compiler_Version	= '4.00'		if $signature_file eq $Signature{V400};
+	$Compiler_Version	= '3.90'		if $signature_file eq $Signature{V390};
+	$Compiler_Version	= '3.80'		if $signature_file eq $Signature{V380};
+	die 'Unable to determine version'	unless defined $Compiler_Version;
+	$Terminator		= chr(189).chr(208)	if $Compiler_Version eq '4.00';
+	$Terminator		= chr( 42).chr( 42)	if $Compiler_Version eq '3.90' or $Compiler_Version eq '3.80';
+}
+#Initialize constants that might depend on version
+sub loadConstants(){
+	{	#Compass directions; dependant on the ExpandedCompass global
+		$Symbol_Compass_Direction[0]	= 'North';
+		$Symbol_Compass_Direction[1]	= 'East';
+		$Symbol_Compass_Direction[2]	= 'South';
+		$Symbol_Compass_Direction[3]	= 'West';
+		$Symbol_Compass_Direction[4]	= 'Up';
+		$Symbol_Compass_Direction[5]	= 'Down';
+		$Symbol_Compass_Direction[6]	= 'Inside';
+		$Symbol_Compass_Direction[7]	= 'Outside';
+		$Symbol_Compass_Direction[8]	= 'Northeast'		if $Story{ExpandedCompass};
+		$Symbol_Compass_Direction[9]	= 'Southeast'		if $Story{ExpandedCompass};
+		$Symbol_Compass_Direction[10]	= 'Southwest'		if $Story{ExpandedCompass};
+		$Symbol_Compass_Direction[11]	= 'Northwest'		if $Story{ExpandedCompass};
+	}
+	{	#Reversed Compass directions; dependant on the ExpandedCompass global
+		$Symbol_Compass_Reversed[0]		= 'south of';
+		$Symbol_Compass_Reversed[1]		= 'west of';
+		$Symbol_Compass_Reversed[2]		= 'north of';
+		$Symbol_Compass_Reversed[3]		= 'east of';
+		$Symbol_Compass_Reversed[4]		= 'down from';
+		$Symbol_Compass_Reversed[5]		= 'up from';
+		$Symbol_Compass_Reversed[6]		= 'outside from';
+		$Symbol_Compass_Reversed[7]		= 'inside from';
+		$Symbol_Compass_Reversed[8]		= 'southwest of'	if $Story{ExpandedCompass};
+		$Symbol_Compass_Reversed[9]		= 'northwest of'	if $Story{ExpandedCompass};
+		$Symbol_Compass_Reversed[10]	= 'northeast of'	if $Story{ExpandedCompass};
+		$Symbol_Compass_Reversed[11]	= 'southeast of'	if $Story{ExpandedCompass};
+	}
+	{	#Gender names
+		$Symbol_Gender[0]	= 'man';
+		$Symbol_Gender[1]	= 'woman';
+	}
+}
+#Load symbol mapping translation from given file
+sub loadSymbols(){
+	return unless defined $FileName_Symbol;
+	while (my $line = <$File_Symbol>) {
+		#Pre-process the line
+		chomp $line;
+		$line	= (split('#', $line))[0];		# Remove comments
+		#Skip ahead if the line doesn't contain anything
+		next if($line =~ m/\^s*$/i );
+		my $parsed;
+#TODO: This could be improved
+		if ($line =~ m/(Room)s?\[?(\d*)\]?\s*=\s*['"](.*)['"]/i ) {
+			$parsed 			= $3;
+			$Symbol_Room[$2]	= $parsed;
+		}
+		if ($line =~ m/(Object|Obj)s?\[?(\d*)\]?\s*=\s*['"](.*)['"]/i ) {
+			$parsed 			= $3;
+			$Symbol_Object[$2]	= $parsed;
+		}
+		if ($line =~ m/(Task)s?\[?(\d*)\]?\s*=\s*['"](.*)['"]/i ) {
+			$parsed 			= $3;
+			$Symbol_Task[$2]	= $parsed;
+		}
+		if ($line =~ m/(Event)s?\[?(\d*)\]?\s*=\s*['"](.*)['"]/i ) {
+			$parsed 			= $3;
+			$Symbol_Event[$2]	= $parsed;
+		}
+		if ($line =~ m/(Person|NPC)s?\[?(\d*)\]?\s*=\s*['"](.*)['"]/i ) {
+			$parsed 			= $3;
+			$Symbol_Person[$2]	= $parsed;
+		}
+		if ($line =~ m/(Group|RoomGroup)s?\[?(\d*)\]?\s*=\s*['"](.*)['"]/i ) {
+			$parsed 			= $3;
+			$Symbol_Group[$2]	= $parsed;
+		}
+		if ($line =~ m/(Variable|Var)s?\[?(\d*)\]?\s*=\s*['"](.*)['"]/i ) {
+			$parsed 			= $3;
+			$Symbol_Variable[$2]	= $parsed;
+		}
+		print "Unable to parse $line\n" unless defined $parsed;
+	}
+}
+sub loadFile(){
+	#Read in the raw file
+	my $raw			= read_file ( $FileName_Compiled, binmode => ':raw' );
+	#V4 is stored as a deflated zlib
+	if ($Compiler_Version	eq '4.00'){
+		#Skip file signature
+		$raw				= substr($raw, $Signature{Size} + $Signature{Extra});
+		#Initiate inflation stream
+		my $stream 			= inflateInit() or die 'Cannot create inflation stream';
+		#Inflate and store in Contents_Compiled
+		($Contents_Compiled, my $status)	= $stream->inflate($raw);
+	}
+	#V3 is stored as encrypted text
+	if ($Compiler_Version	eq '3.90' or $Compiler_Version	eq '3.80'){
+		#Generate decryption mask
+		my $size			= length($raw);
+		my $mask			= '';
+		for (1 .. $size) { $mask .= chr(nextRandom()) }
+		#Decrypt
+		$Contents_Compiled	= $raw ^ $mask;
+	}
+	#Dump raw file if called for
+	print $File_Decompiled $Contents_Compiled if defined $Option_Rawdump;
 	#Split and store lines
-	@Lines = split(chr(13).chr(10), $decrypted);
-}
-#Inflate a file using zlib, for v4.00
-sub inflateFile(){
-	#Read in the compressed file
-	my $compressed			= read_file ( $FileName_Compiled, binmode => ':raw' );
-	#Skip file signature
-	$compressed				= substr($compressed, $Signature_Size + $Signature_Extra);
-	#Initiate inflation stream
-	my $stream 				= inflateInit() or die 'Cannot create inflation stream';
-	#Inflate
-	my $inflated;
-	my $status;
-	($inflated, $status)	= $stream->inflate($compressed);
-	print $File_Decompiled $inflated if defined $Option_Rawdump;
-	#Split and store lines
-	@Lines = split(chr(13).chr(10), $inflated);
-}
-##Parsing
-#Convert text into uniform naming without spaces or quotes
-sub parseFile(){
-	#Parse header, printing the most important settings
+	@Lines = split(chr(13).chr(10), $Contents_Compiled);
 	print $File_Log "Decompiler v$Decompiler_Version on $FileName_Compiled";
+}
+##Parsing each content type
+sub parse(){
+	#Parse header, printing the most important settings
 	parseHeader();
-	print $File_Log ", $Game{Title} by $Game{Author} (ADRIFT v$Gamefile_Version)\n";
-	print $File_Log "\tBattles\n"			if $Game{EnableBattle};
-	print $File_Log "\t8-point compass\n"	if $Game{ExpandedCompass};
-	print $File_Log "\tGraphics\n"			if $Game{EnableGraphics};
-	print $File_Log "\tSound\n"				if $Game{EnableSound};
+	print $File_Log " $Story{Title} by $Story{Author} (ADRIFT v$Compiler_Version)\n";
+	print $File_Log "\tBattles\n"			if $Story{EnableBattle};
+	print $File_Log "\t8-point compass\n"	if $Story{ExpandedCompass};
+	print $File_Log "\tGraphics\n"			if $Story{EnableGraphics};
+	print $File_Log "\tSound\n"				if $Story{EnableSound};
 	#Load constants based on header
 	loadConstants();
+	$Story{Directions}		= 8;
+	$Story{Directions}		= 12	if $Story{ExpandedCompass};
 	#Parse rooms
-	my $rooms		= nextSLV();
+	my $rooms		= nextLine();
 	print $File_Log "$rooms rooms\n";
-	for my $room	(1 .. $rooms)	{ push @Rooms, parseRoom($room); }
+	for my $room	(1 .. $rooms) { push @Rooms, parseRoom($room); }
 	#Parse objects
-	my $objects		= nextSLV();
+	my $objects		= nextLine();
 	print $File_Log "$objects objects\n";
-	for my $object	(1 .. $objects)	{ push @Objects, parseObject($object); }
+	for my $object	(1 .. $objects) { push @Objects, parseObject($object); }
 	#Parse tasks
-	my $tasks		= nextSLV();
+	my $tasks		= nextLine();
 	print $File_Log "$tasks tasks\n";
-	for my $task	(1 .. $tasks)	{ push @Tasks, parseTask($task); }
+	for my $task	(1 .. $tasks) { push @Tasks, parseTask($task); }
 	#Parse timed events
-	my $events		= nextSLV();
+	my $events		= nextLine();
 	print $File_Log "$events events\n";
-	for my $event	(1 .. $events)	{ push @Events, parseEvent($event); }
+	for my $event	(1 .. $events) { push @Events, parseEvent($event); }
 	#Parse persons
-	my $persons		= nextSLV();
+	my $persons		= nextLine();
 	print $File_Log "$persons persons\n";
-	for my $person	(1 .. $persons)	{ push @Persons, parsePerson($person); }
+	for my $person	(1 .. $persons) { push @Persons, parsePerson($person); }
 	#Parse room-groups
-	my $groups		= nextSLV();
+	my $groups		= nextLine();
 	print $File_Log "$groups groups\n";
-	for my $group	(1 .. $groups)	{ push @Groups, parseGroup($group); }
+	for my $group	(1 .. $groups) { push @Groups, parseGroup($group); }
 	#Parse parser-synonyms
-	my $synonyms	= nextSLV();
+	my $synonyms	= nextLine();
 	print $File_Log "$synonyms synonyms\n";
-	for my $synonym	(1 .. $synonyms)	{ push @Synonyms, parseSynonym($synonym); }
+	for my $synonym	(1 .. $synonyms) { push @Synonyms, parseSynonym($synonym); }
 	#Parse variables
 	my $variables	= 0;
-	$variables		= nextSLV()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	$variables		= nextLine()	if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
 	print $File_Log "$variables variables\n";
-	for my $variable	(1 .. $variables)	{ push @Variables, parseVariable($variable); }
+	for my $variable	(1 .. $variables) { push @Variables, parseVariable($variable); }
 	#Parse alternate-language resources
 	my $alrs		= 0;
-	$alrs			= nextSLV()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	$alrs			= nextLine() if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
 	print $File_Log "$alrs ALRs\n";
-	for my $alr	(1 .. $alrs)	{ push @ALRs, parseALR($alr); }
+	for my $alr	(1 .. $alrs) { push @ALRs, parseALR($alr); }
 	#Parse footer
 	parseFooter();
 	print $File_Log "Parsed  $Lines_Next of ". ($#Lines + 1) ." lines\n";
 }
 sub parseHeader(){
 	#Intro Text
-	$Game{Intro}			= nextMLV();
-	$Game{Start}			= nextSLV() + 1;	# The only place rooms are indexed from 0
-	$Game{Ending}			= nextMLV();
+	$Story{Intro}			= nextMulti();
+	$Story{Start}			= nextLine() + 1;	#NOTE: The only place rooms are indexed from 0
+	$Story{Ending}			= nextMulti();
 	#text	GameName
-	$Game{Title}			= nextSLV();
+	$Story{Title}			= nextLine();
 	#text	GameAuthor
-	$Game{Author}			= nextSLV();
-	#number	MaxCarried
-	my $max_carried			= nextSLV()	if $Gamefile_Version eq '3.80'; #TODO postprocessing into MaxSize and MaxWeight
+	$Story{Author}			= nextLine();
+	#number	MaxCarried		TODO postprocessing into MaxSize and MaxWeight
+	my $max_carried			= nextLine()		if $Compiler_Version eq '3.80';
 	#text	DontUnderstand
-	$Game{Error}			= nextSLV();
+	$Story{Error}			= nextLine();
 	#number	Perspective
-	$Game{Perspective}		= nextSLV();
+	$Story{Perspective}		= nextLine();
 	#truth	ShowExits
-	$Game{ShowExits}		= nextSLV();
+	$Story{ShowExits}		= nextLine();
 	#number	WaitTurns
-	$Game{WaitTurns}		= nextSLV();
+	$Story{WaitTurns}		= nextLine();
 	#truth	DispFirstRoom
-	$Game{InitialLook}		= 0			if $Gamefile_Version eq '3.80';
-	$Game{InitialLook}		= nextSLV()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	$Story{InitialLook}		= 0					if $Compiler_Version eq '3.80';
+	$Story{InitialLook}		= nextLine()		if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
 	#truth	BattleSystem
-	$Game{EnableBattle}		= 0			if $Gamefile_Version eq '3.80';
-	$Game{EnableBattle}		= nextSLV()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	$Story{EnableBattle}	= 0					if $Compiler_Version eq '3.80';
+	$Story{EnableBattle}	= nextLine()		if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
 	#number	MaxScore
-	$Game{MaxScore}			= 0			if $Gamefile_Version eq '3.80';
-	$Game{MaxScore}			= nextSLV()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	$Story{MaxScore}		= 0					if $Compiler_Version eq '3.80';
+	$Story{MaxScore}		= nextLine()		if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
 	#text	PlayerName
-	$Game{PlayerName}		= ''		if $Gamefile_Version eq '3.80';
-	$Game{PlayerName}		= nextSLV()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	$Story{PlayerName}		= ''				if $Compiler_Version eq '3.80';
+	$Story{PlayerName}		= nextLine()		if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
 	#truth	PromptName
-	$Game{PromptName}		= 0			if $Gamefile_Version eq '3.80';
-	$Game{PromptName}		= nextSLV()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	$Story{PromptName}		= 0					if $Compiler_Version eq '3.80';
+	$Story{PromptName}		= nextLine()		if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
 	#text	PlayerDesc
-	$Game{PlayerDesc}		= ''		if $Gamefile_Version eq '3.80';
-	$Game{PlayerDesc}		= nextSLV()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	$Story{PlayerDesc}		= ''				if $Compiler_Version eq '3.80';
+	$Story{PlayerDesc}		= nextLine()		if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
 	#number	Task
-	$Game{AltDescTask}		= 0			if $Gamefile_Version eq '3.80';
-	$Game{AltDescTask}		= nextSLV()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	$Story{AltDescTask}		= 0					if $Compiler_Version eq '3.80';
+	$Story{AltDescTask}		= nextLine()		if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
 	#text	AltDesc
-	$Game{AltDesc}			= nextSLV()	if $Game{AltDescTask};
+	$Story{AltDesc}			= nextLine()		if $Story{AltDescTask};
 	#number	Position
-	$Game{Position}			= 0			if $Gamefile_Version eq '3.80';
-	$Game{Position}			= nextSLV()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	$Story{Position}		= 0					if $Compiler_Version eq '3.80';
+	$Story{Position}		= nextLine()		if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
 	#number	ParentObject
-	$Game{ParentObject}		= 0			if $Gamefile_Version eq '3.80';
-	$Game{ParentObject}		= nextSLV()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	$Story{ParentObject}	= 0					if $Compiler_Version eq '3.80';
+	$Story{ParentObject}	= nextLine()		if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
 	#number	PlayerGender
-	$Game{PlayerGender}		= 0			if $Gamefile_Version eq '3.80';
-	$Game{PlayerGender}		= nextSLV()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	$Story{PlayerGender}	= 0					if $Compiler_Version eq '3.80';
+	$Story{PlayerGender}	= nextLine()		if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
 	#number	MaxSize
-	$Game{MaxSize}			= 0			if $Gamefile_Version eq '3.80';	#TODO Process $max_carried into this
-	$Game{MaxSize}			= nextSLV()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	$Story{MaxSize}			= 0					if $Compiler_Version eq '3.80';	#TODO Process $max_carried into this
+	$Story{MaxSize}			= nextLine()		if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
 	#number	MaxWeight
-	$Game{MaxWeight}		= 0			if $Gamefile_Version eq '3.80';	#TODO Process $max_carried into this
-	$Game{MaxWeight}		= nextSLV()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	$Story{MaxWeight}		= 0					if $Compiler_Version eq '3.80';	#TODO Process $max_carried into this
+	$Story{MaxWeight}		= nextLine()		if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
 	#battle	PlayerStats
-	$Game{PlayerStats}		= parseBattle()	if $Game{EnableBattle};
+	$Story{PlayerStats}		= parseBattle()		if $Story{EnableBattle};
 	#truth	EightPointCompass
-	$Game{ExpandedCompass}	= 0			if $Gamefile_Version eq '3.80';
-	$Game{ExpandedCompass}	= nextSLV()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	$Story{ExpandedCompass}	= 0					if $Compiler_Version eq '3.80';
+	$Story{ExpandedCompass}	= nextLine()		if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
 	#truth	NoDebug			SKIP
-	nextSLV()							if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	nextLine()									if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
 	#truth	NoScoreNotify
-	$Game{NoScoreNotify}	= 1			if $Gamefile_Version eq '3.80';
-	$Game{NoScoreNotify}	= nextSLV()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	$Story{NoScoreNotify}	= 1					if $Compiler_Version eq '3.80';
+	$Story{NoScoreNotify}	= nextLine()		if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
 	#truth	DisableMap
-	$Game{DisableMap}		= 0			if $Gamefile_Version eq '3.80';
-	$Game{DisableMap}		= nextSLV()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	$Story{DisableMap}		= 0					if $Compiler_Version eq '3.80';
+	$Story{DisableMap}		= nextLine()		if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
 	#truth	NoAutoComplete	SKIP
-	nextSLV()							if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	nextLine()									if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
 	#truth	NoControlPanel	SKIP
-	nextSLV()							if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	nextLine()									if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
 	#truth	NoMouse			SKIP
-	nextSLV()							if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	nextLine()									if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
 	#truth	Sound
-	$Game{EnableSound}		= 0			if $Gamefile_Version eq '3.80';
-	$Game{EnableSound}		= nextSLV()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	$Story{EnableSound}		= 0					if $Compiler_Version eq '3.80';
+	$Story{EnableSound}		= nextLine()		if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
 	#truth	Graphics
-	$Game{EnableGraphics}	= 0			if $Gamefile_Version eq '3.80';
-	$Game{EnableGraphics}	= nextSLV()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	$Story{EnableGraphics}	= 0					if $Compiler_Version eq '3.80';
+	$Story{EnableGraphics}	= nextLine()		if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
 	#resource	IntroRes
-	$Game{IntroRes}			= parseResource()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	$Story{IntroRes}		= parseResource()	if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
 	#resource	WinRes
-	$Game{WinRes}			= parseResource()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	$Story{WinRes}			= parseResource()	if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
 	#truth	StatusBox
-	$Game{EnableStatusBox}	= 0			if $Gamefile_Version eq '3.80' or $Gamefile_Version eq '3.90';
-	$Game{EnableStatusBox}	= nextSLV()	if $Gamefile_Version eq '4.00';
+	$Story{EnableStatusBox}	= 0					if $Compiler_Version eq '3.80' or $Compiler_Version eq '3.90';
+	$Story{EnableStatusBox}	= nextLine()		if $Compiler_Version eq '4.00';
 	#text	StatusBoxText
-	$Game{StatusBoxText}	= ''		if $Gamefile_Version eq '3.80' or $Gamefile_Version eq '3.90';
-	$Game{StatusBoxText}	= nextSLV()	if $Gamefile_Version eq '4.00';
+	$Story{StatusBoxText}	= ''				if $Compiler_Version eq '3.80' or $Compiler_Version eq '3.90';
+	$Story{StatusBoxText}	= nextLine()		if $Compiler_Version eq '4.00';
 	#2x	Unknown				SKIP
-	nextSLV()							if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
-	nextSLV()							if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	nextLine()									if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
+	nextLine()									if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
 	#truth	Embedded
-	$Game{Embedded}			= 0			if $Gamefile_Version eq '3.80' or $Gamefile_Version eq '3.90';
-	$Game{Embedded}			= nextSLV()	if $Gamefile_Version eq '4.00';
+	$Story{Embedded}		= 0					if $Compiler_Version eq '3.80' or $Compiler_Version eq '3.90';
+	$Story{Embedded}		= nextLine()		if $Compiler_Version eq '4.00';
 }
 sub parseFooter(){
 	#truth	CustomFont
-	$Game{CustomFont}		= 0			if $Gamefile_Version eq '3.80';
-	$Game{CustomFont}		= nextSLV()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	$Story{CustomFont}		= 0					if $Compiler_Version eq '3.80';
+	$Story{CustomFont}		= nextLine()		if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
 	#text	FontNameSize
-	$Game{FontNameSize}		= nextSLV()	if $Game{CustomFont};
+	$Story{FontNameSize}	= nextLine()		if $Story{CustomFont};
 	#text	CompileDate
-	$Game{CompileDate}		= nextSLV();
+	$Story{CompileDate}		= nextLine();
 	#text	Password		SKIP
-	nextSLV()	if $Gamefile_Version eq '3.80' or $Gamefile_Version eq '3.90';
+	nextLine()	if $Compiler_Version eq '3.80' or $Compiler_Version eq '3.90';
 }
 #Routines for parsing major objects
 sub parseRoom($){
 	my $id		= shift;
 	my %room	= ();
 	#text	Short
-	$room{Title}			= nextSLV();
+	$room{Title}			= nextLine();
 	print $File_Log "\t\t$id: $room{Title}\n"	if defined $Option_Verbose;
 	#text	Long
-	$room{Description}		= nextSLV();
+	$room{Description}		= nextLine();
 	#text	LastDesc
-	$room{LastDesc}			= nextSLV()	if $Gamefile_Version eq '3.80' or $Gamefile_Version eq '3.90';
+	$room{LastDesc}			= nextLine()		if $Compiler_Version eq '3.80' or $Compiler_Version eq '3.90';
 	#exit	RoomExits
 	my $exit_count			= 0;
 	$room{Exits}			= [];
-	for my $dir (0 .. $#Compass_Direction) { 
+	for my $dir (1 .. $Story{Directions}) { 
 		push @{ $room{Exits} }, parseExit();
-		$exit_count++	unless $room{Exits}[$dir]{Destination} eq 0;
+		$exit_count++	unless $room{Exits}[$dir - 1]{Destination} eq 0;
 	}
 	print $File_Log "\t\t\t$exit_count exit(s)\n"	if defined $Option_Verbose;
 	#text	AddDesc1
-	$room{AltDesc1}			= nextSLV()	if $Gamefile_Version eq '3.80' or $Gamefile_Version eq '3.90';
+	$room{AltDesc1}			= nextLine()		if $Compiler_Version eq '3.80' or $Compiler_Version eq '3.90';
 	#number	AddDesc1Task
-	$room{AltDesc1Task}		= nextSLV()	if $Gamefile_Version eq '3.80' or $Gamefile_Version eq '3.90';
+	$room{AltDesc1Task}		= nextLine()		if $Compiler_Version eq '3.80' or $Compiler_Version eq '3.90';
 	#text	AddDesc2
-	$room{AltDesc2}			= nextSLV()	if $Gamefile_Version eq '3.80' or $Gamefile_Version eq '3.90';
+	$room{AltDesc2}			= nextLine()		if $Compiler_Version eq '3.80' or $Compiler_Version eq '3.90';
 	#number	AddDesc2Task
-	$room{AltDesc2Task}		= nextSLV()	if $Gamefile_Version eq '3.80' or $Gamefile_Version eq '3.90';
+	$room{AltDesc2Task}		= nextLine()		if $Compiler_Version eq '3.80' or $Compiler_Version eq '3.90';
 	#number	Obj
-	$room{AltDesc3Obj}		= nextSLV()	if $Gamefile_Version eq '3.80' or $Gamefile_Version eq '3.90';
+	$room{AltDesc3Obj}		= nextLine()		if $Compiler_Version eq '3.80' or $Compiler_Version eq '3.90';
 	#text	AltDesc
-	$room{AltDesc3}			= nextSLV()	if $Gamefile_Version eq '3.80' or $Gamefile_Version eq '3.90';
+	$room{AltDesc3}			= nextLine()		if $Compiler_Version eq '3.80' or $Compiler_Version eq '3.90';
 	#number	TypeHideObjects
-	$room{TypeHideObjects}	= nextSLV()	if $Gamefile_Version eq '3.80' or $Gamefile_Version eq '3.90';
+	$room{TypeHideObjects}	= nextLine()		if $Compiler_Version eq '3.80' or $Compiler_Version eq '3.90';
 	#resource	Res
-	$room{Resource}			= parseResource()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	$room{Resource}			= parseResource()	if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
 	#resource	LastRes
-	$room{LastDescResource}	= parseResource()	if $Gamefile_Version eq '3.90';
+	$room{LastDescResource}	= parseResource()	if $Compiler_Version eq '3.90';
 	#resource	Task1Res
-	$room{AltDesc1Resource}	= parseResource()	if $Gamefile_Version eq '3.90';
+	$room{AltDesc1Resource}	= parseResource()	if $Compiler_Version eq '3.90';
 	#resource	Task2Res
-	$room{AltDesc2Resource}	= parseResource()	if $Gamefile_Version eq '3.90';
+	$room{AltDesc2Resource}	= parseResource()	if $Compiler_Version eq '3.90';
 	#resource	AltRes
-	$room{AltDesc3Resource}	= parseResource()	if $Gamefile_Version eq '3.90';
+	$room{AltDesc3Resource}	= parseResource()	if $Compiler_Version eq '3.90';
 	#RoomAlt	Alternates
-	my $alt_count	= 0;
-	my @alternates	= ();
-	$alt_count		= nextSLV()	if $Gamefile_Version eq '4.00';
-	for (1 .. $alt_count){ push @alternates, parseRoomAlt() }
+	my $alternate_count	= 0;
+	my @alternates		= ();
+	$alternate_count		= nextLine()		if $Compiler_Version eq '4.00';
+	for (1 .. $alternate_count){ push @alternates, parseRoomAlt() }
 	$room{Alternates}		= \@alternates;
-	print $File_Log "\t\t\t$alt_count alternate(s)\n"	if defined $Option_Verbose && $alt_count;
+	print $File_Log "\t\t\t$alternate_count alternate(s)\n"	if defined $Option_Verbose && $alternate_count;
 	#truth	HideOnMap
-	$room{Hidden}		= nextSLV()		if ($Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00') && not $Game{DisableMap};
+	$room{Hidden}			= nextLine()		if ($Compiler_Version eq '3.90' or $Compiler_Version eq '4.00') && not $Story{DisableMap};
 	return \%room;
 }
 sub parseObject($){
 	my $id		= shift;
 	my %object	= ();
 	#text	Prefix
-	$object{Prefix}				= nextSLV();
+	$object{Prefix}			= nextLine();
 	#text	Short
-	$object{Short}				= nextSLV();
+	$object{Short}			= nextLine();
 	print $File_Log "\t\t$id: ($object{Prefix}) $object{Short}\n"	if defined $Option_Verbose;
 	#text	Alias
-	my $alias					= 1;
-	$alias						= nextSLV()	if $Gamefile_Version eq '4.00';
-	$object{Alias}				= ();
-	for (1 .. $alias) { push @{ $object{Alias} }, nextSLV(); }
+	my $alias				= 1;
+	$alias					= nextLine()		if $Compiler_Version eq '4.00';
+	$object{Alias}			= ();
+	for (1 .. $alias) { push @{ $object{Alias} }, nextLine(); }
 	#truth	Static
-	$object{Static}				= nextSLV();
+	$object{Static}			= nextLine();
 	#text	Description
-	$object{Description}		= nextSLV();
+	$object{Description}	= nextLine();
 	#number	InitialPosition
-	$object{InitialPosition}	= nextSLV();
+	$object{InitialPosition}= nextLine();
 	#number	Task
-	$object{AltDescTask}		= nextSLV();
+	$object{AltDescTask}	= nextLine();
 	#truth	TaskNotDone
-	my $altdesctype				= nextSLV();
-	$object{AltDescType}		= 'if';
-	$object{AltDescType}		= 'unless'	if $altdesctype;
+	$object{AltDescType}	= nextLine();
 	#text	AltDesc
-	$object{AltDesc}			= nextSLV();
+	$object{AltDesc}		= nextLine();
 	#RoomList	Where
-	$object{WhereType}			= 9;
-	$object{WhereType}			= nextSLV()	if $object{Static};
+	$object{WhereType}		= 9;
+	$object{WhereType}		= nextLine()		if $object{Static};
 #	0: NO_ROOMS
 #	1: ONE_ROOM
 #	2: SOME_ROOMS
 #	3: ALL_ROOMS
 #	4: NPC_PART
 #	9: NULL/Off-stage
-	$object{Where}				= [];
-	push @{	$object{Where} }, nextSLV if $object{WhereType} eq 1;
+	$object{Where}			= [];
+	push @{	$object{Where} }, nextLine if $object{WhereType} eq 1;
 	if($object{WhereType} eq 2){
-		for my $room (0 .. $#Rooms){ push @{	$object{Where} }, $room if nextSLV(); }
+		for my $room (0 .. $#Rooms){ push @{ $object{Where} }, $room if nextLine(); }
 	}
-	my $surfaceContainer		= 0;
-	$surfaceContainer			= nextSLV()	if $Gamefile_Version eq '3.80';
+	my $surfaceContainer	= 0;
+	$surfaceContainer		= nextLine()		if $Compiler_Version eq '3.80';
 	#truth	Container
-	$object{Container}			= 0			unless $surfaceContainer eq 1;
-	$object{Container}			= 1			if $surfaceContainer eq 1;
-	$object{Container}			= nextSLV()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	$object{Container}		= 0					unless $surfaceContainer eq 1;
+	$object{Container}		= 1					if $surfaceContainer eq 1;
+	$object{Container}		= nextLine()		if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
 	#truth	Surface
-	$object{Surface}			= 0			unless $surfaceContainer eq 2;
-	$object{Surface}			= 1			if $surfaceContainer eq 2;
-	$object{Surface}			= nextSLV()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	$object{Surface}		= 0					unless $surfaceContainer eq 2;
+	$object{Surface}		= 1					if $surfaceContainer eq 2;
+	$object{Surface}		= nextLine()		if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
 	#number	Capacity
-	$object{Capacity}			= nextSLV();
-	$object{Capacity}			= $object{Capacity} * 10 + 2	if $Gamefile_Version eq '3.80';
+	$object{Capacity}		= nextLine();
+	$object{Capacity}		= $object{Capacity} * 10 + 2	if $Compiler_Version eq '3.80';
 	#truth	Wearable
-	$object{Wearable}			= 0;
-	$object{Wearable}			= nextSLV()	unless $object{Static};
+	$object{Wearable}		= 0;
+	$object{Wearable}		= nextLine()		unless $object{Static};
 	#number	SizeWeight
-	$object{SizeWeight}			= 0;
-	$object{SizeWeight}			= nextSLV()	unless $object{Static};
+	$object{SizeWeight}		= 0;
+	$object{SizeWeight}		= nextLine()		unless $object{Static};
 	#number	Parent
-	$object{Parent}				= 0;
-	$object{Parent}				= nextSLV()	unless $object{Static};
-	$object{Parent}				= nextSLV()	if $object{Static} && $object{WhereType} eq 4;
+	$object{Parent}			= 0;
+	$object{Parent}			= nextLine()		unless $object{Static};
+	$object{Parent}			= nextLine()		if $object{Static} && $object{WhereType} eq 4;
 	#number	Openable
-	my $openable				= nextSLV();
+	my $openable			= nextLine();
 #	0: UNOPENABLE
 #	5: OPEN
 #	6: CLOSED
 #	7: LOCKED
-	$object{Openable}			= $openable;
+	$object{Openable}		= $openable;
 	#Code 5 and 6 are reversed in v3.XX
-	if($Gamefile_Version eq '3.80' or $Gamefile_Version eq '3.90'){
-		$object{Openable}			= 6 if $openable eq 5;
-		$object{Openable}			= 5 if $openable eq 6;
+	if($Compiler_Version eq '3.80' or $Compiler_Version eq '3.90'){
+		$object{Openable}		= 6 if $openable eq 5;
+		$object{Openable}		= 5 if $openable eq 6;
 	}
 	#number	Key
-	$object{Key}				= nextSLV()	if $Gamefile_Version eq '4.00' && $object{Openable};
+	$object{Key}			= nextLine()		if $Compiler_Version eq '4.00' && $object{Openable};
 	#number	SitLie
-	my $enterableType			= nextSLV();
-	$object{EnterableType}		= $enterableType;
-	$object{SitStandable}		= 1 if $enterableType eq 1 || $enterableType eq 3;
-	$object{Lieable}			= 1 if $enterableType eq 2 || $enterableType eq 3;
+	my $enterableType		= nextLine();
+	$object{EnterableType}	= $enterableType;
+	$object{SitStandable}	= 1 if $enterableType eq 1 || $enterableType eq 3;
+	$object{Lieable}		= 1 if $enterableType eq 2 || $enterableType eq 3;
 	#truth	Edible
-	$object{Edible}				= nextSLV()	unless $object{Static};
+	$object{Edible}			= nextLine()		unless $object{Static};
 	#truth	Readable
-	$object{Readable}			= nextSLV();
+	$object{Readable}		= nextLine();
 	#truth	ReadText
-	$object{ReadText}			= nextSLV()	if $object{Readable};
+	$object{ReadText}		= nextLine()		if $object{Readable};
 	#truth	Weapon
-	$object{Weapon}				= nextSLV()	unless $object{Static};
+	$object{Weapon}			= nextLine()		unless $object{Static};
 	#number	CurrentState
-	$object{CurrentState}		= 0			if $Gamefile_Version eq '3.80' or $Gamefile_Version eq '3.90';
-	$object{CurrentState}		= nextSLV() if $Gamefile_Version eq '4.00';
+	$object{CurrentState}	= 0					if $Compiler_Version eq '3.80' or $Compiler_Version eq '3.90';
+	$object{CurrentState}	= nextLine()		if $Compiler_Version eq '4.00';
 	#number	States
-	$object{States}				= 0;
-	$object{States}				= nextSLV()	if $object{CurrentState};
+	$object{States}			= 0;
+	$object{States}			= nextLine()		if $object{CurrentState};
 	#truth	StateListed
-	$object{StateListed}		= 0;
-	$object{StateListed}		= nextSLV()	if $object{CurrentState};
+	$object{StateListed}	= 0;
+	$object{StateListed}	= nextLine()		if $object{CurrentState};
 	#truth	ListFlag
-	$object{ListFlag}			= 0			if $Gamefile_Version eq '3.80' or $Gamefile_Version eq '3.90';
-	$object{ListFlag}			= nextSLV() if $Gamefile_Version eq '4.00';
+	$object{ListFlag}		= 0					if $Compiler_Version eq '3.80' or $Compiler_Version eq '3.90';
+	$object{ListFlag}		= nextLine()		if $Compiler_Version eq '4.00';
 	#resource	Res1
-	$object{Resource1}			= parseResource()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	$object{Resource1}		= parseResource()	if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
 	#resource	Res2
-	$object{Resource2}			= parseResource()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	$object{Resource2}		= parseResource()	if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
 	#battle	Battle
-	$object{BattleStats}		= parseBattle()	if $Game{EnableBattle};
+	$object{BattleStats}	= parseBattle()		if $Story{EnableBattle};
 	#text	InRoomDesc
-	$object{InRoomDesc}			= ''		if $Gamefile_Version eq '3.80' or $Gamefile_Version eq '3.90';
-	$object{InRoomDesc}			= nextSLV() if $Gamefile_Version eq '4.00';
+	$object{InRoomDesc}		= ''				if $Compiler_Version eq '3.80' or $Compiler_Version eq '3.90';
+	$object{InRoomDesc}		= nextLine()		if $Compiler_Version eq '4.00';
 	#number	OnlyWhenNotMoved
-	$object{InRoomDescType}		= 0			if $Gamefile_Version eq '3.80' or $Gamefile_Version eq '3.90';
-	$object{InRoomDescType}		= nextSLV() if $Gamefile_Version eq '4.00';
+	$object{InRoomDescType}	= 0					if $Compiler_Version eq '3.80' or $Compiler_Version eq '3.90';
+	$object{InRoomDescType}	= nextLine()		if $Compiler_Version eq '4.00';
 	#Update the Object mapping references:
-	push @ObjectStatic,	$id		if $object{Static};
-	push @ObjectPortable, $id	unless $object{Static};
-	push @ObjectOpenable, $id	if $object{Openable};
-	push @ObjectContainer, $id	if $object{Container};
-	push @ObjectSurface, $id	if $object{Surface};
-	push @ObjectHolder,	$id		if $object{Container} || $object{Surface};
-	push @ObjectLieable, $id	if $object{Lieable};
+	push @ObjectPortable, $id		unless $object{Static};
+	push @ObjectStatic,	$id			if $object{Static};
+	push @ObjectOpenable, $id		if $object{Openable};
+	push @ObjectContainer, $id		if $object{Container};
+	push @ObjectSurface, $id		if $object{Surface};
+	push @ObjectHolder,	$id			if $object{Container} || $object{Surface};
+	push @ObjectLieable, $id		if $object{Lieable};
 	push @ObjectSitStandable, $id	if $object{SitStandable};
 	return \%object;
 }
@@ -625,326 +692,290 @@ sub parseTask($){
 	my $id		= shift;
 	my %task	= ();
 	#text	Command
-	my $commands				= nextSLV();
-	$commands++					if $Gamefile_Version eq '3.80' or $Gamefile_Version eq '3.90';
-	$task{Commands}				= ();
-	for (1 .. $commands) { push @{ $task{Commands} }, nextSLV(); }
+	my $commands			= nextLine();
+	$commands++				if $Compiler_Version eq '3.80' or $Compiler_Version eq '3.90';
+	$task{Commands}			= ();
+	for (1 .. $commands) { push @{ $task{Commands} }, nextLine(); }
 	print $File_Log "\t\t$id: $task{Commands}[0] ($commands)\n"	if defined $Option_Verbose;
 	#text	CompleteText
-	$task{CompleteText}				= nextSLV();
+	$task{CompleteText}			= nextLine();
 	#text	ReverseMessage
-	$task{ReverseText}				= nextSLV();
+	$task{ReverseText}			= nextLine();
 	#text	RepeatText
-	$task{RepeatText}				= nextSLV();
+	$task{RepeatText}			= nextLine();
 	#text	AdditionalMessage
-	$task{AdditionalText}			= nextSLV();
+	$task{AdditionalText}		= nextLine();
 	#number	ShowRoomDesc
-	$task{ShowRoomDesc}				= nextSLV();
+	$task{ShowRoomDesc}			= nextLine();
 	#Some 3.80 variables
-	if ($Gamefile_Version eq '3.80'){
+	if ($Compiler_Version eq '3.80'){
 		#number	Score
-		$task{Score}				= nextSLV();
+		$task{Score}			= nextLine();
 		#number	SingleScore
-		$task{BSingleScore}			= nextSLV();
+		$task{BSingleScore}		= nextLine();
 		#TaskMove	Movements
-		$task{Movements}			= ();
+		$task{Movements}		= ();
 		for (1 .. 6) {
 			my %movement	= ();
-			$movement{Var1}		= nextSLV();
-			$movement{Var2}		= nextSLV();
-			$movement{Var3}		= nextSLV();
+			$movement{Var1}		= nextLine();
+			$movement{Var2}		= nextLine();
+			$movement{Var3}		= nextLine();
 			push @{ $task{Movements} },  \%movement;
 		}
 	}
 	#truth	Repeatable
-	$task{Repeatable}				= nextSLV();
+	$task{Repeatable}			= nextLine();
 	#truth	Reversible
-	$task{Reversible}				= nextSLV();
+	$task{Reversible}			= nextLine();
 	#text	ReverseCommand
-	my $commands_reverse			= nextSLV();
-	$commands_reverse++				if $Gamefile_Version eq '3.80' or $Gamefile_Version eq '3.90';
+	my $commands_reverse		= nextLine();
+	$commands_reverse++			if $Compiler_Version eq '3.80' or $Compiler_Version eq '3.90';
 	print $File_Log "\t\t\t$commands_reverse reversion(s)\n"	if defined $Option_Verbose;
-	$task{CommandsReverse}			= [];
-	for (1 .. $commands_reverse) { push @{ $task{CommandsReverse} }, nextSLV(); }
+	$task{CommandsReverse}		= [];
+	for (1 .. $commands_reverse) { push @{ $task{CommandsReverse} }, nextLine(); }
 	#Some 3.80 variables
-	if ($Gamefile_Version eq '3.80'){
+	if ($Compiler_Version eq '3.80'){
 		#number	WearObj1
-		$task{WearObj1}				= nextSLV();
+		$task{WearObj1}			= nextLine();
 		#number	WearObj2
-		$task{WearObj2}				= nextSLV();
+		$task{WearObj2}			= nextLine();
 		#number	HoldObj1
-		$task{HoldObj1}				= nextSLV();
+		$task{HoldObj1}			= nextLine();
 		#number	HoldObj2
-		$task{HoldObj2}				= nextSLV();
+		$task{HoldObj2}			= nextLine();
 		#number	HoldObj3
-		$task{HoldObj3}				= nextSLV();
+		$task{HoldObj3}			= nextLine();
 		#number	Obj1
-		$task{Obj1}					= nextSLV();
+		$task{Obj1}				= nextLine();
 		#number	Task
-		$task{Task}					= nextSLV();
+		$task{Task}				= nextLine();
 		#truth	TaskNotDone
-		$task{TaskNotDone}			= nextSLV();
+		$task{TaskNotDone}		= nextLine();
 		#text	TaskMsg
-		$task{TaskMsg}				= nextSLV();
+		$task{TaskMsg}			= nextLine();
 		#text	HoldMsg
-		$task{HoldMsg}				= nextSLV();
+		$task{HoldMsg}			= nextLine();
 		#text	WearMsg
-		$task{WearMsg}				= nextSLV();
+		$task{WearMsg}			= nextLine();
 		#text	CompanyMsg
-		$task{CompanyMsg}			= nextSLV();
+		$task{CompanyMsg}		= nextLine();
 		#truth	NotInSameRoom
-		$task{NotInSameRoom}		= nextSLV();
+		$task{NotInSameRoom}	= nextLine();
 		#number	NPC
-		$task{NPC}					= nextSLV();
+		$task{NPC}				= nextLine();
 		#text	Obj1Msg
-		$task{Obj1Msg}				= nextSLV();
+		$task{Obj1Msg}			= nextLine();
 		#number	Obj1Room
-		$task{Obj1Room}				= nextSLV();
+		$task{Obj1Room}			= nextLine();
 	}
 	#RoomList	Where
-	$task{WhereType}				= 9;
-	$task{WhereType}				= nextSLV();
+	$task{WhereType}			= 9;
+	$task{WhereType}			= nextLine();
 #	0: NO_ROOMS
 #	1: ONE_ROOM
 #	2: SOME_ROOMS
 #	3: ALL_ROOMS
 #	4: NPC_PART
 #	9: NULL/Off-stage
-	$task{Where}					= [];
-	push @{	$task{Where} }, nextSLV if $task{WhereType} eq 1;
+	$task{Where}				= [];
+	push @{	$task{Where} }, nextLine if $task{WhereType} eq 1;
 	if($task{WhereType} eq 2){
-		for my $room (1 .. $#Rooms){ push @{ $task{Where} }, $room if nextSLV(); }
+		for my $room (1 .. $#Rooms){ push @{ $task{Where} }, $room if nextLine(); }
 	}
 	#Some 3.80 variables
-	if ($Gamefile_Version eq '3.80'){
+	if ($Compiler_Version eq '3.80'){
 		#truth	KillsPlayer
-		$task{KillsPlayer}			= nextSLV();
+		$task{KillsPlayer}		= nextLine();
 		#truth	HoldingSameRoom
-		$task{HoldingSameRoom}		= nextSLV();
+		$task{HoldingSameRoom}	= nextLine();
 	}
 #	$Question ?$Question:$Hint1,$Hint2
 	#text	Question
-	$task{Question}					= nextSLV();
+	$task{Question}				= nextLine();
 	#text	Hint1
-	$task{Hint1}					= nextSLV()	if length $task{Question} != 0;
+	$task{Hint1}				= nextLine()		if length $task{Question};
 	#text	Hint2
-	$task{Hint2}					= nextSLV()	if length $task{Question} != 0;
+	$task{Hint2}				= nextLine()		if length $task{Question};
 	#Some 3.80 variables
-	if ($Gamefile_Version eq '3.80'){
+	if ($Compiler_Version eq '3.80'){
 		#number	Obj2
-		$task{Obj2}				= nextSLV();
+		$task{Obj2}				= nextLine();
 		#number	Obj2Var1
-		$task{Obj2Var1}			= nextSLV()	if $task{Obj2};
+		$task{Obj2Var1}			= nextLine()		if $task{Obj2};
 		#number	Obj2Var2
-		$task{Obj2Var2}			= nextSLV()	if $task{Obj2};
+		$task{Obj2Var2}			= nextLine()		if $task{Obj2};
 		#text	Obj2Msg
-		$task{Obj2Msg}			= nextSLV()	if $task{Obj2};
+		$task{Obj2Msg}			= nextLine()		if $task{Obj2};
 		#truth	WinGame
-		$task{WinGame}			= nextSLV();
+		$task{WinGame}			= nextLine();
 	}
 	#Restrictions	Restrictions
-	$task{Restrictions}				= [];
-	my $restrictions				= 0;
-	$restrictions					= nextSLV()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	$task{Restrictions}			= [];
+	my $restrictions			= 0;
+	$restrictions				= nextLine()		if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
 	print $File_Log "\t\t\t$restrictions restriction(s)\n"	if defined $Option_Verbose;
 	for (1 .. $restrictions) { push @{ $task{Restrictions} }, parseRestriction(); }
 	#Actions	Actions
-	$task{Actions}					= [];
-	my $actions						= 0;
-	$actions						= nextSLV()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	$task{Actions}				= [];
+	my $actions					= 0;
+	$actions					= nextLine()		if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
 	print $File_Log "\t\t\t$actions action(s)\n"	if defined $Option_Verbose;
 	for (1 .. $actions) { push @{ $task{Actions} }, parseAction(); }
 	#text	RestrMask
-	$task{RestrMask}				= nextSLV()	if $Gamefile_Version eq '4.00';
+	$task{RestrMask}			= nextLine()		if $Compiler_Version eq '4.00';
 	#resource Res
-	$task{Resource}					= parseResource()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	$task{Resource}				= parseResource()	if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
 	return \%task;
 }
 sub parseEvent($){
 	my $id		= shift;
 	my %event	= ();
 	#text	Short
-	$event{Short}				= nextSLV();
+	$event{Short}			= nextLine();
 	print $File_Log "\t\t$id: $event{Short}\n"	if defined $Option_Verbose;
 	#number	StarterType
-	$event{StarterType}			= nextSLV();
+	$event{StarterType}		= nextLine();
 	#number	StartTime
-	$event{StartTime}			= nextSLV()	if $event{StarterType} eq 2;
+	$event{StartTime}		= nextLine()		if $event{StarterType} eq 2;
 	#number	EndTime
-	$event{EndTime}				= nextSLV()	if $event{StarterType} eq 2;
+	$event{EndTime}			= nextLine()		if $event{StarterType} eq 2;
 	#number	TaskNum
-	$event{TaskNum}				= nextSLV()	if $event{StarterType} eq 3;
+	$event{TaskNum}			= nextLine()		if $event{StarterType} eq 3;
 	#number	RestartType
-	$event{RestartType}			= nextSLV();
+	$event{RestartType}		= nextLine();
 	#truth	TaskFinished
-	$event{TaskFinished}		= nextSLV();
+	$event{TaskFinished}	= nextLine();
 	#number	Time1
-	$event{Time1}				= nextSLV();
+	$event{Time1}			= nextLine();
 	#number	Time2
-	$event{Time2}				= nextSLV();
+	$event{Time2}			= nextLine();
 	#text	StartText
-	$event{StartText}			= nextSLV();
+	$event{StartText}		= nextLine();
 	#text	LookText
-	$event{LookText}			= nextSLV();
+	$event{LookText}		= nextLine();
 	#text	FinishText
-	$event{FinishText}			= nextSLV();
+	$event{FinishText}		= nextLine();
 	#RoomList	Where
-	$event{WhereType}			= 9;
-	$event{WhereType}			= nextSLV();
+	$event{WhereType}		= 9;
+	$event{WhereType}		= nextLine();
 #	0: NO_ROOMS
 #	1: ONE_ROOM
 #	2: SOME_ROOMS
 #	3: ALL_ROOMS
 #	4: NPC_PART
 #	9: NULL/Off-stage
-	$event{Where}				= ();
-	push @{	$event{Where} }, nextSLV if $event{WhereType} eq 1;
+	$event{Where}			= ();
+	push @{	$event{Where} }, nextLine if $event{WhereType} eq 1;
 	if($event{WhereType} eq 2){
-		for my $room (1 .. $#Rooms){ push @{ $event{Where} }, $room if nextSLV(); }
+		for my $room (1 .. $#Rooms){ push @{ $event{Where} }, $room if nextLine(); }
 	}
 	#number	PauseTask
-	$event{PauseTask}			= nextSLV();
+	$event{PauseTask}		= nextLine();
 	#truth	PauserCompleted
-	$event{PauserCompleted}		= nextSLV();
+	$event{PauserCompleted}	= nextLine();
 	#number	PrefTime1
-	$event{PrefTime1}			= nextSLV();
+	$event{PrefTime1}		= nextLine();
 	#text	PrefText1
-	$event{PrefText1}			= nextSLV();
+	$event{PrefText1}		= nextLine();
 	#number	ResumeTask
-	$event{ResumeTask}			= nextSLV();
+	$event{ResumeTask}		= nextLine();
 	#truth	ResumerCompleted
-	$event{ResumerCompleted}	= nextSLV();
+	$event{ResumerCompleted}= nextLine();
 	#number	PrefTime2
-	$event{PrefTime2}			= nextSLV();
+	$event{PrefTime2}		= nextLine();
 	#text	PrefText2
-	$event{PrefText2}			= nextSLV();
+	$event{PrefText2}		= nextLine();
 	#number	Obj2
-	$event{Obj2}				= nextSLV();
+	$event{Obj2}			= nextLine();
 	#number	Obj2Dest
-	$event{Obj2Dest}			= nextSLV();
+	$event{Obj2Dest}		= nextLine();
 	#number	Obj3
-	$event{Obj3}				= nextSLV();
+	$event{Obj3}			= nextLine();
 	#number	Obj3Dest
-	$event{Obj3Dest}			= nextSLV();
+	$event{Obj3Dest}		= nextLine();
 	#number	Obj1
-	$event{Obj1}				= nextSLV();
+	$event{Obj1}			= nextLine();
 	#number	Obj1Dest
-	$event{Obj1Dest}			= nextSLV();
+	$event{Obj1Dest}		= nextLine();
 	#number	TaskAffected
-	$event{TaskAffected}		= nextSLV();
+	$event{TaskAffected}	= nextLine();
 	#Resources
-	$event{Res1}				= parseResource()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
-	$event{Res2}				= parseResource()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
-	$event{Res3}				= parseResource()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
-	$event{Res4}				= parseResource()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
-	$event{Res5}				= parseResource()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	$event{Res1}			= parseResource()		if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
+	$event{Res2}			= parseResource()		if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
+	$event{Res3}			= parseResource()		if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
+	$event{Res4}			= parseResource()		if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
+	$event{Res5}			= parseResource()		if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
 	return \%event;
-#v4.00
-#	$Short #StarterType
-#	?#StarterType=2:#StartTime,#EndTime ?#StarterType=3:#TaskNum
-#	#RestartType BTaskFinished #Time1 #Time2 $StartText $LookText $FinishText
-#	<ROOM_LIST0>Where #PauseTask
-#	BPauserCompleted #PrefTime1 $PrefText1 #ResumeTask BResumerCompleted
-#	#PrefTime2 $PrefText2 #Obj2 #Obj2Dest #Obj3 #Obj3Dest #Obj1 #Obj1Dest
-#	#TaskAffected [5]<RESOURCE>Res
-#v3.90
-#	$Short #StarterType
-#	?#StarterType=2:#StartTime,#EndTime ?#StarterType=3:#TaskNum
-#	#RestartType BTaskFinished #Time1 #Time2 $StartText $LookText $FinishText
-#	<ROOM_LIST0>Where #PauseTask
-#	BPauserCompleted #PrefTime1 $PrefText1 #ResumeTask BResumerCompleted
-#	#PrefTime2 $PrefText2 #Obj2 #Obj2Dest #Obj3 #Obj3Dest #Obj1 #Obj1Dest
-#	#TaskAffected [5]<RESOURCE>Res
-#v3.80
-#   $Short #StarterType
-#	?#StarterType=2:#StartTime,#EndTime ?#StarterType=3:#TaskNum
-#	#RestartType BTaskFinished #Time1 #Time2 $StartText $LookText $FinishText
-#	<ROOM_LIST0>Where #PauseTask
-#	BPauserCompleted #PrefTime1 $PrefText1 #ResumeTask BResumerCompleted
-#	#PrefTime2 $PrefText2 #Obj2 #Obj2Dest #Obj3 #Obj3Dest #Obj1 #Obj1Dest
-#	#TaskAffected
 }
 sub parsePerson($){
 	my $id		= shift;
 	my %person	= ();
 	#text	Name
-	$person{Name}				= nextSLV();
+	$person{Name}			= nextLine();
 	print $File_Log "\t\t$id: $person{Name}\n"	if defined $Option_Verbose;
 	#text	Prefix
-	$person{Prefix}				= nextSLV();
+	$person{Prefix}			= nextLine();
 	#text	Alias
-	my $alias					= 1;
-	$alias						= nextSLV()	if $Gamefile_Version eq '4.00';
-	$person{Alias}				= ();
-	for (1 .. $alias) { push @{ $person{Alias} }, nextSLV(); }
+	my $alias				= 1;
+	$alias					= nextLine()		if $Compiler_Version eq '4.00';
+	$person{Alias}			= ();
+	for (1 .. $alias) { push @{ $person{Alias} }, nextLine(); }
 	#text	Descr
-	$person{Description}		= nextSLV();
+	$person{Description}	= nextLine();
 	#number	StartRoom
-	$person{StartRoom}			= nextSLV();
+	$person{StartRoom}		= nextLine();
 	#text	AltText
-	$person{AltDesc}			= nextSLV();
+	$person{AltDesc}		= nextLine();
 	#text	Task
-	$person{AltDescTask}		= nextSLV();
+	$person{AltDescTask}	= nextLine();
 	#text	Topics
-	my $topics					= nextSLV();
-	$person{Topics}				= ();
+	my $topics				= nextLine();
+	$person{Topics}			= ();
 	print $File_Log "\t\t\t$topics topics(s)\n"	if defined $Option_Verbose;
 	for (1 .. $topics) { push @{ $person{Topics} }, parseTopic(); }
 	#text	Walks
-	my $walks					= nextSLV();
-	$person{Walks}				= ();
+	my $walks				= nextLine();
+	$person{Walks}			= ();
 	print $File_Log "\t\t\t$walks walks(s)\n"	if defined $Option_Verbose;
 	for (1 .. $walks) { push @{ $person{Walks} }, parseWalk(); }
 	#truth	ShowEnterExit
-	$person{ShowEnterExit}		= nextSLV();
+	$person{ShowEnterExit}	= nextLine();
 	#text	EnterText
-	$person{EnterText}			= nextSLV()	if $person{ShowEnterExit};
+	$person{EnterText}		= nextLine()		if $person{ShowEnterExit};
 	#text	ExitText
-	$person{ExitText}			= nextSLV()	if $person{ShowEnterExit};
+	$person{ExitText}		= nextLine()		if $person{ShowEnterExit};
 	#text	InRoomText
-	$person{InRoomText}			= nextSLV();
+	$person{InRoomText}		= nextLine();
 	#number	Gender
-	$person{Gender}	= 0				if $Gamefile_Version eq '3.80';
-	$person{Gender}	= nextSLV()		if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	$person{Gender}			= 0					if $Compiler_Version eq '3.80';
+	$person{Gender}			= nextLine()		if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
 	#Resources
-	$person{Res1}				= parseResource()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
-	$person{Res2}				= parseResource()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
-	$person{Res3}				= parseResource()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
-	$person{Res4}				= parseResource()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	$person{Res1}			= parseResource()	if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
+	$person{Res2}			= parseResource()	if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
+	$person{Res3}			= parseResource()	if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
+	$person{Res4}			= parseResource()	if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
 	#battle	Battle
-	$person{BattleStats}		= parseBattle()	if $Game{EnableBattle};
+	$person{BattleStats}	= parseBattle()		if $Story{EnableBattle};
 	return \%person;
-#v4.00
-#	$Name $Prefix V$Alias $Descr #StartRoom $AltText #Task V<TOPIC>Topics
-#	V<WALK>Walks BShowEnterExit ?BShowEnterExit:$EnterText,$ExitText
-#	$InRoomText #Gender [4]<RESOURCE>Res ?GBattleSystem:<NPC_BATTLE>Battle
-#v3.90
-#	$Name $Prefix [1]$Alias $Descr #StartRoom $AltText #Task V<TOPIC>Topics
-#	V<WALK>Walks BShowEnterExit ?BShowEnterExit:$EnterText,$ExitText
-#	$InRoomText #Gender [4]<RESOURCE>Res ?GBattleSystem:<NPC_BATTLE>Battle
-#v3.80
-#	$Name $Prefix [1]$Alias $Descr #StartRoom $AltText #Task V<TOPIC>Topics
-#	V<WALK>Walks BShowEnterExit ?BShowEnterExit:$EnterText,$ExitText
-#	$InRoomText ZGender
 }
 sub parseGroup($){
 	my $id		= shift;
 	my %group	= ();
 	#text	Name
-	$group{Name}				= nextSLV();
+	$group{Name}			= nextLine();
 	print $File_Log "\t\t$id: $group{Name}\n"	if defined $Option_Verbose;
 	#		Rooms
-	$group{Rooms}				= ();
-	for my $room (1 .. $#Rooms){ push @{ $group{Rooms} }, $room if nextSLV(); }
+	$group{Rooms}			= ();
+	for my $room (1 .. $#Rooms){ push @{ $group{Rooms} }, $room if nextLine(); }
 	return \%group;
 }
 sub parseSynonym($){
 	my $id		= shift;
 	my %synonym	= ();
 	#text	Original
-	$synonym{Original}				= nextSLV();
+	$synonym{Original}			= nextLine();
 	#text	Replacement
-	$synonym{Replacement}			= nextSLV();
+	$synonym{Replacement}		= nextLine();
 	print $File_Log "\t\t$id: $synonym{Replacement} -> $synonym{Original}\n"	if defined $Option_Verbose;
 	return \%synonym;
 }
@@ -952,12 +983,12 @@ sub parseVariable($){
 	my $id			= shift;
 	my %variable	= ();
 	#text	Name
-	$variable{Name}				= nextSLV();
+	$variable{Name}			= nextLine();
 	#number	Type
-	$variable{Type}				= 0			if $Gamefile_Version eq '3.90';
-	$variable{Type}				= nextSLV()	if $Gamefile_Version eq '4.00';
+	$variable{Type}			= 0					if $Compiler_Version eq '3.90';
+	$variable{Type}			= nextLine()		if $Compiler_Version eq '4.00';
 	#text	Value
-	$variable{Value}			= nextSLV();
+	$variable{Value}		= nextLine();
 	print $File_Log "\t\t$id: $variable{Name} ($variable{Type}) = $variable{Value}\n"	if defined $Option_Verbose;
 	return \%variable;
 }
@@ -965,386 +996,203 @@ sub parseALR($){
 	my $id		= shift;
 	my %alr	= ();
 	#text	Original
-	$alr{Original}				= nextSLV();
+	$alr{Original}			= nextLine();
 	#text	Replacement
-	$alr{Replacement}			= nextSLV();
+	$alr{Replacement}		= nextLine();
 	print $File_Log "\t\t$id: $alr{Original} -> $alr{Replacement}\n"	if defined $Option_Verbose;
 	return \%alr;
 }
 #Routines for parsing sub-objects
 sub parseBattle(){
-	die 'Fatal error: Battle system is not implemented';
+	die 'Fatal error: Stories using the battle system are not supported';
 }
 sub parseResource(){
 	my %resource	= ();
-	if($Game{EnableSound}){
+	if($Story{EnableSound}){
 		#text	SoundFile
-		$resource{SoundFile}	= nextSLV();
+		$resource{SoundFile}	= nextLine();
 		#number	SoundLen
-		$resource{SoundSize}	= 0			if $Gamefile_Version eq '3.90';
-		$resource{SoundSize}	= nextSLV()	if $Gamefile_Version eq '4.00';
+		$resource{SoundSize}	= 0				if $Compiler_Version eq '3.90';
+		$resource{SoundSize}	= nextLine()	if $Compiler_Version eq '4.00';
 	}
-	if($Game{EnableGraphics}){
+	if($Story{EnableGraphics}){
 		#text	GraphicFile
-		$resource{GraphicFile}	= nextSLV();
+		$resource{GraphicFile}	= nextLine();
 		#number	GraphicLen
-		$resource{GraphicSize}	= 0			if $Gamefile_Version eq '3.90';
-		$resource{GraphicSize}	= nextSLV()	if $Gamefile_Version eq '4.00';
+		$resource{GraphicSize}	= 0				if $Compiler_Version eq '3.90';
+		$resource{GraphicSize}	= nextLine()	if $Compiler_Version eq '4.00';
 	}
 	return \%resource;
 }
 sub parseRoomAlt(){
 	my %alt				= ();
 	#	$M1
-	$alt{M1}			= nextSLV();
+	$alt{M1}			= nextLine();
 	#	#Type
-	$alt{Type}			= nextSLV();
+	$alt{Type}			= nextLine();
 	#	<RESOURCE>Res1
 	$alt{Resource1}		= parseResource();
 	#	$M2
-	$alt{M2}			= nextSLV();
+	$alt{M2}			= nextLine();
 	#	#Var2
-	$alt{Var2}			= nextSLV();
+	$alt{Var2}			= nextLine();
 	#	<RESOURCE>Res2
 	$alt{Resource2}		= parseResource();
 	#	#HideObjects
-	$alt{HideObjects}	= nextSLV();
+	$alt{HideObjects}	= nextLine();
 	#	$Changed
-	$alt{Changed}		= nextSLV();
+	$alt{Changed}		= nextLine();
 	#	#Var3
-	$alt{Var3}			= nextSLV();
+	$alt{Var3}			= nextLine();
 	#	#DisplayRoom
-	$alt{DisplayRoom}	= nextSLV();
+	$alt{DisplayRoom}	= nextLine();
 	return \%alt;
 }
 sub parseExit(){
 	my %exit		= ();
 	#destination
-	$exit{Destination}	= nextSLV();
-	if ($exit{Destination} != 0){
-		$exit{Var1}	= nextSLV();
-		$exit{Var2}	= nextSLV();
-		$exit{Var3}	= 0;
-		$exit{Var3}	= nextSLV()			if $Gamefile_Version eq '4.00';
+	$exit{Destination}	= nextLine();
+	if ($exit{Destination}){
+		$exit{Var1}		= nextLine();
+		$exit{Var2}		= nextLine();
+		$exit{Var3}		= 0;
+		$exit{Var3}		= nextLine()			if $Compiler_Version eq '4.00';
 	}
 	return \%exit;
 }
 sub parseRestriction(){
 	my %restriction		= ();
 	#number	Type
-	$restriction{Type}		= nextSLV();
+	$restriction{Type}		= nextLine();
 	if($restriction{Type} eq 0){
-		$restriction{Var1}	= nextSLV();
-		$restriction{Var2}	= nextSLV();
-		$restriction{Var3}	= nextSLV();
+		$restriction{Var1}	= nextLine();
+		$restriction{Var2}	= nextLine();
+		$restriction{Var3}	= nextLine();
 	}
 	if($restriction{Type} eq 1){
-		$restriction{Var1}	= nextSLV();
-		$restriction{Var2}	= nextSLV();
+		$restriction{Var1}	= nextLine();
+		$restriction{Var2}	= nextLine();
 	}
 	if($restriction{Type} eq 2){
-		$restriction{Var1}	= nextSLV();
-		$restriction{Var2}	= nextSLV();
+		$restriction{Var1}	= nextLine();
+		$restriction{Var2}	= nextLine();
 	}
 	if($restriction{Type} eq 3){
-		$restriction{Var1}	= nextSLV();
-		$restriction{Var2}	= nextSLV();
-		$restriction{Var3}	= nextSLV();
+		$restriction{Var1}	= nextLine();
+		$restriction{Var2}	= nextLine();
+		$restriction{Var3}	= nextLine();
 	}
 	if($restriction{Type} eq 4){
-		$restriction{Var1}	= nextSLV();
-		$restriction{Var1}++	if $Gamefile_Version eq '3.90' && $restriction{Var1};
-		$restriction{Var2}	= nextSLV();
-		$restriction{Var3}	= nextSLV();
+		$restriction{Var1}	= nextLine();
+		$restriction{Var1}++				if $Compiler_Version eq '3.90' && $restriction{Var1};
+		$restriction{Var2}	= nextLine();
+		$restriction{Var3}	= nextLine();
 		$restriction{Var4}	= '';
-		$restriction{Var4}	= nextSLV()		if $Gamefile_Version eq '4.00';
+		$restriction{Var4}	= nextLine()	if $Compiler_Version eq '4.00';
 	}
-	$restriction{FailureText}	= nextSLV();
+	$restriction{FailureText}	= nextLine();
 	return \%restriction;
-#v4.00	TASK_RESTR
-#	#Type
-#	?#Type=0:#Var1,#Var2,#Var3
-#	?#Type=1:#Var1,#Var2
-#	?#Type=2:#Var1,#Var2
-#	?#Type=3:#Var1,#Var2,#Var3
-#	?#Type=4:#Var1,#Var2,#Var3,$Var4
-#	$FailMessage"
-#v3.90	TASK_RESTR
-#	#Type
-#	?#Type=0:#Var1,#Var2,#Var3
-#	?#Type=1:#Var1,#Var2
-#	?#Type=2:#Var1,#Var2
-#	?#Type=3:#Var1,#Var2,#Var3
-#	?#Type=4:#Var1,#Var2,#Var3,EVar4
-#	|V390_TASK_RESTR:Var1>0?#Var1++|
-#	$FailMessage
 }
 sub parseAction(){
 	my %action;
 	#number	Type
-	$action{Type}		= nextSLV();
-	$action{Type}++		if $action{Type} > 4 && $Gamefile_Version eq '3.90';
+	$action{Type}		= nextLine();
+	$action{Type}++		if $action{Type} > 4 && $Compiler_Version eq '3.90';
 	if($action{Type} eq 0){
-		$action{Var1}	= nextSLV();
-		$action{Var2}	= nextSLV();
-		$action{Var3}	= nextSLV();
+		$action{Var1}	= nextLine();
+		$action{Var2}	= nextLine();
+		$action{Var3}	= nextLine();
 	}
 	if($action{Type} eq 1){
-		$action{Var1}	= nextSLV();
-		$action{Var2}	= nextSLV();
-		$action{Var3}	= nextSLV();
+		$action{Var1}	= nextLine();
+		$action{Var2}	= nextLine();
+		$action{Var3}	= nextLine();
 	}
 	if($action{Type} eq 2){
-		$action{Var1}	= nextSLV();
-		$action{Var2}	= nextSLV();
+		$action{Var1}	= nextLine();
+		$action{Var2}	= nextLine();
 	}
 	if($action{Type} eq 3){
-		$action{Var1}	= nextSLV();
-		$action{Var2}	= nextSLV();
-		$action{Var3}	= nextSLV();
-		$action{Expr}	= nextSLV()	if $Gamefile_Version eq '4.00';
-		$action{Expr}	= nextSLV()	if $Gamefile_Version eq '3.90' && $action{Var2} eq 5;
-		$action{Expr}	= ''		if $Gamefile_Version eq '3.90' && $action{Var2} != 5;
-		$action{Var5}	= nextSLV()	if $Gamefile_Version eq '4.00';
-		$action{Var5}	= nextSLV()	if $Gamefile_Version eq '3.90' && $action{Var2} != 5;
-		$action{Var5}	= 0			if $Gamefile_Version eq '3.90' && $action{Var2} eq 5;
+		$action{Var1}	= nextLine();
+		$action{Var2}	= nextLine();
+		$action{Var3}	= nextLine();
+		$action{Expr}	= nextLine()	if $Compiler_Version eq '4.00';
+		$action{Expr}	= nextLine()	if $Compiler_Version eq '3.90' && $action{Var2} eq 5;
+		$action{Expr}	= ''			if $Compiler_Version eq '3.90' && $action{Var2} != 5;
+		$action{Var5}	= nextLine()	if $Compiler_Version eq '4.00';
+		$action{Var5}	= nextLine()	if $Compiler_Version eq '3.90' && $action{Var2} != 5;
+		$action{Var5}	= 0				if $Compiler_Version eq '3.90' && $action{Var2} eq 5;
 	}
 	if($action{Type} eq 4){
-		$action{Var1}	= nextSLV();
+		$action{Var1}	= nextLine();
 	}
 	if($action{Type} eq 5){
-		$action{Var1}	= nextSLV();
-		$action{Var2}	= nextSLV();
+		$action{Var1}	= nextLine();
+		$action{Var2}	= nextLine();
 	}
 	if($action{Type} eq 6){
-		$action{Var1}	= nextSLV();
-		$action{Var2}	= 0			if $Gamefile_Version eq '3.90';
-		$action{Var2}	= nextSLV()	if $Gamefile_Version eq '4.00';
-		$action{Var3}	= 0			if $Gamefile_Version eq '3.90';
-		$action{Var3}	= nextSLV()	if $Gamefile_Version eq '4.00';
+		$action{Var1}	= nextLine();
+		$action{Var2}	= 0				if $Compiler_Version eq '3.90';
+		$action{Var2}	= nextLine()	if $Compiler_Version eq '4.00';
+		$action{Var3}	= 0				if $Compiler_Version eq '3.90';
+		$action{Var3}	= nextLine()	if $Compiler_Version eq '4.00';
 	}
 	if($action{Type} eq 7){
-		$action{Var1}	= nextSLV();
-		$action{Var2}	= nextSLV();
-		$action{Var3}	= nextSLV();
+		$action{Var1}	= nextLine();
+		$action{Var2}	= nextLine();
+		$action{Var3}	= nextLine();
 	}
 	return \%action;
-#v4.00	TASK_ACTION",
-#	#Type
-#	?#Type=0:#Var1,#Var2,#Var3
-#	?#Type=1:#Var1,#Var2,#Var3
-#	?#Type=2:#Var1,#Var2
-#	?#Type=3:#Var1,#Var2,#Var3,$Expr,#Var5
-#	?#Type=4:#Var1
-#	?#Type=5:#Var1,#Var2
-#	?#Type=6:#Var1,#Var2,#Var3
-#	?#Type=7:iVar1,iVar2,iVar3
-#v3.90	TASK_ACTION
-#	#Type |V390_TASK_ACTION:Type>4?#Type++|
-#	?#Type=0:#Var1,#Var2,#Var3
-#	?#Type=1:#Var1,#Var2,#Var3
-#	?#Type=2:#Var1,#Var2
-#	?#Type=3:#Var1,#Var2,#Var3,|V390_TASK_ACTION:$Expr_#Var5|
-#	?#Type=4:#Var1
-#	?#Type=6:#Var1,ZVar2,ZVar3
-#	?#Type=7:iVar1,iVar2,iVar3
 }
 sub parseTopic(){
 	my %topic;
 	#text	Subject
-	$topic{Subject}			= nextSLV();
+	$topic{Subject}			= nextLine();
 	#text	Reply
-	$topic{Reply}			= nextSLV();
+	$topic{Reply}			= nextLine();
 	#number	Task
-	$topic{AltReplyTask}	= nextSLV();
+	$topic{AltReplyTask}	= nextLine();
 	#text	AltReply
-	$topic{AltReply}		= nextSLV();
+	$topic{AltReply}		= nextLine();
 	return \%topic;
 }
 sub parseWalk(){
 	my %walk;
 	#number	NumStops
-	my $stops				= nextSLV();
+	my $stops				= nextLine();
 	print $File_Log "\t\t\t\t$stops stops(s)\n"	if defined $Option_Verbose;
 	$walk{NumStops}			= $stops;
 	#truth	Loop
-	$walk{Loop}				= nextSLV();
+	$walk{Loop}				= nextLine();
 	#number	StartTask
-	$walk{StartTask}		= nextSLV();
+	$walk{StartTask}		= nextLine();
 	#number	CharTask
-	$walk{CharTask		}	= nextSLV();
+	$walk{CharTask		}	= nextLine();
 	#number	MeetObject
-	$walk{MeetObject}		= nextSLV();
+	$walk{MeetObject}		= nextLine();
 #TODO: ?!#MeetObject=0:|V380_WALK:_MeetObject_|
 	#number	ObjectTask
-	$walk{ObjectTask}		= nextSLV();
+	$walk{ObjectTask}		= nextLine();
 	#number	StoppingTask
-	$walk{StoppingTask}		= 0			if $Gamefile_Version eq '3.80';
-	$walk{StoppingTask}		= nextSLV()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	$walk{StoppingTask}		= 0				if $Compiler_Version eq '3.80';
+	$walk{StoppingTask}		= nextLine()	if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
 	#number	MeetChar
-	$walk{MeetChar}			= 0			if $Gamefile_Version eq '3.80' or $Gamefile_Version eq '3.90';
-	$walk{MeetChar}			= nextSLV()	if $Gamefile_Version eq '4.00';
+	$walk{MeetChar}			= 0				if $Compiler_Version eq '3.80' or $Compiler_Version eq '3.90';
+	$walk{MeetChar}			= nextLine()	if $Compiler_Version eq '4.00';
 	#text	ChangedDesc
-	$walk{ChangedDesc}		= ''		if $Gamefile_Version eq '3.80';
-	$walk{ChangedDesc}		= nextSLV()	if $Gamefile_Version eq '3.90' or $Gamefile_Version eq '4.00';
+	$walk{ChangedDesc}		= ''			if $Compiler_Version eq '3.80';
+	$walk{ChangedDesc}		= nextLine()	if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
 	#	{WALK:#Rooms_#Times}
 	$walk{Stops}				= ();
 	for (1 .. $stops){
 		my %stop		= ();
-		$stop{Room}		= nextSLV();
-		$stop{Times}	= nextSLV();
+		$stop{Room}		= nextLine();
+		$stop{Times}	= nextLine();
 		push @{ $walk{Stops} }, \%stop;
 	}
-
 	return \%walk;
-#v4.00	WALK
-#	#NumStops BLoop #StartTask #CharTask #MeetObject
-#	#ObjectTask #StoppingTask #MeetChar $ChangedDesc
-#	{WALK:#Rooms_#Times}
-#v3.90	WALK
-#	#NumStops BLoop #StartTask #CharTask #MeetObject
-#	#ObjectTask #StoppingTask ZMeetChar $ChangedDesc
-#	{WALK:#Rooms_#Times}
-#v3.80	WALK
-#	#NumStops BLoop #StartTask #CharTask #MeetObject
-#	?!#MeetObject=0:|V380_WALK:_MeetObject_|
-#	#ObjectTask ZMeetChar ZStoppingTask EChangedDesc
-#	{WALK:#Rooms_#Times}
 }
-##Analyzing
-#Convert the text to uniform name that can be used in I7
-sub uniformName($) {
-	my $text	= shift;
-	return ''	unless defined $text;
-	$text		=~ s/[-_\"\[\]\\%]//g;		# Trim all unwanted characters
-	$text		=~ s/\s+/ /g;				# Convert all whitespace to spaces, and trim multiples
-	$text		=~ s/^\s+|\s+$//g;			# Trim leading/trailing whitespace
-	return $text;
-}
-#Convert the text to a safe variable name
-sub variableName($) {
-	my $text	= shift;
-	return ''	unless defined $text;
-	$text		= lc($text);				# Lower case
-	$text		=~ s/[-_\'"*\[\]\\%]//g;	# Trim all unwanted characters
-	$text		=~ s/\s+/ /g;				# Convert all whitespace to spaces, and trim multiples
-	$text		=~ s/^\s+|\s+$//g;			# Trim leading/trailing whitespace
-	$text		=~ s/ (.)/uc($1)/ge;		# Remove spaces, capitalizing the next letter
-	return $text;
-}
-sub arrayString($;$) {
-	my $listref		= shift;
-	my $delimiter	= shift;
-	$delimiter		= '' unless defined $delimiter;
-	my @list		= @{ $listref };
-	my $text = '';
-	for my $i (0 .. $#list) {
-		my $item	= 'ERROR-NIL';
-		$item		= $list[$i] if defined $list[$i];
-		$text		.= ', ' if $i > 0;
-		$text		.= "$delimiter$item$delimiter";
-	}
-	return $text;
-}
-sub translate(){
-	#Generate translation names
-	print $File_Log "Generating names:\n";
-	generateNames();
-	#Print object mapping tables
-	print $File_Log "Static Object IDs:\n";
-	for my $id (1 .. $#ObjectStatic){
-		print $File_Log "\t$id -> $ObjectStatic[$id] (".nameObject($ObjectStatic[$id]).")\n";
-	}
-	print $File_Log "Portable Object IDs:\n";
-	for my $id (1 .. $#ObjectPortable){
-		print $File_Log "\t$id -> $ObjectPortable[$id] (".nameObject($ObjectPortable[$id]).")\n";
-	}
-	print $File_Log "Holder Object IDs:\n";
-	for my $id (0 .. $#ObjectHolder){
-		print $File_Log "\t$id -> $ObjectHolder[$id] (".nameObject($ObjectHolder[$id]).")\n";
-	}
-}
-#Generate translation names, printing to mapping file if asked for
-sub generateNames(){
-	#Rooms
-	$Translate_Room[0]	= 'nowhere'				unless defined $Translate_Room[0];
-	for my $room (1 .. $#Rooms){
-		my $title				= uniformName($Rooms[$room]{Title});
-		$Translate_Room[$room]	= $title		unless defined $Translate_Room[$room];
-	}
-	#TODO: RoomGroups
-	#Objects
-	$Translate_Object[0]		= 'nothing'		unless defined $Translate_Object[0];
-	for my $object (1 .. $#Objects){
-		my $name					= variableName("$Objects[$object]{Prefix} $Objects[$object]{Short}");
-		$Objects[$object]{Name}		= $name;
-		$Translate_Object[$object]	= $name		unless defined $Translate_Object[$object];
-	}
-	#Tasks
-	for my $task (1 .. $#Tasks){
-		my @commands	= @{ $Tasks[$task]{Commands} };
-		my $name		= '';
-		$name			= variableName($Translate_Task[$task])	if defined $Translate_Task[$task];
-		foreach my $line (@commands){
-			$line	= variableName($line);
-			$name	= $line			if length($line) > length($name);
-		}
-		$Tasks[$task]{Name}		= $name;
-		$Translate_Task[$task]	= $name			unless defined $Translate_Task[$task];
-	}
-	#Persons
-	$Translate_Person[0]		= 'player'	unless defined $Translate_Person[0];
-	for my $person (1 .. $#Persons){
-		my $name					= uniformName($Persons[$person]{Prefix}.' '.$Persons[$person]{Name});
-		$Translate_Person[$person]	= $name		unless defined $Translate_Person[$person];
-	}
-	#Variables
-	for my $variable (1 .. $#Variables){
-		my $name						= uniformName($Variables[$variable]{Name});
-		$Translate_Variable[$variable]	= $name	unless defined $Translate_Variable[$variable];
-	}
-
-}
-#Write the symbol mapping file - TODO this must be revamped, as the new generateNames sub *WILL* ensure all translations are set
-sub writeMapping(){
-	#Rooms
-	print $File_Mapping "#\t$#Rooms Rooms:\n";
-	for my $room (0 .. $#Rooms){
-		my $title				= uniformName($Rooms[$room]{Title});
-		print $File_Mapping "#Room$room\t = 'TODO'\t# Name: $title\n"	unless	defined $Translate_Room[$room];
-		print $File_Mapping "Room$room\t = '$Translate_Room[$room]'\n"	if		defined $Translate_Room[$room];
-	}
-	#TODO: RoomGroups
-	#Objects
-	print $File_Mapping "#\t$#Objects Objects:\n";
-	for my $object (0 .. $#Objects){
-		my $name	= $Objects[$object]{Name};
-		print $File_Mapping "#Object$object\t = '$name'\n"						unless	defined $Translate_Object[$object];
-		print $File_Mapping "Object$object\t = '$Translate_Object[$object]'\n"	if		defined $Translate_Object[$object];
-	}
-	#Tasks
-	print $File_Mapping "#\t$#Tasks Tasks:\n";
-	for my $task (1 .. $#Tasks){
-		my $name				= $Tasks[$task]{Name};
-		print $File_Mapping "#Task$task\t = 'TODO'\t# Name: $name\n"	unless	defined $Translate_Task[$task];
-		print $File_Mapping "Task$task\t = '$Translate_Task[$task]'\n"	if 		defined $Translate_Task[$task];
-	}
-	#Persons
-	print $File_Mapping "#\t$#Persons Persons:\n";
-	for my $person (0 .. $#Persons){
-		my $name				= uniformName($Persons[$person]{Prefix}.' '.$Persons[$person]{Name});
-		print $File_Mapping "#Person$person\t = 'TODO'\t# Name: $name\n"		unless	defined $Translate_Person[$person];
-		print $File_Mapping "Person$person\t = '$Translate_Person[$person]'\n"	if		defined $Translate_Person[$person];
-		$Translate_Person[$person]	= $name										unless defined $Translate_Person[$person];
-	}
-	#Variables
-	print $File_Mapping "#\t$#Variables Variables:\n" if defined $Option_Generate;
-	for my $variable (1 .. $#Variables){
-		my $name					= uniformName($Variables[$variable]{Name});
-		print $File_Mapping "#Variable$variable\t = 'TODO'\t# Name: $name\n"		if defined $Option_Generate && not defined $Translate_Variable[$variable];
-		print $File_Mapping "Variable$variable\t = '$Translate_Variable[$variable]'\n"	if defined $Option_Generate && defined $Translate_Variable[$variable];
-	}
-}
+##Analyzing cross-type
 sub analyze(){
 	#Analyze rooms
 	print $File_Log "Analyzing rooms:\n";
@@ -1355,13 +1203,18 @@ sub analyze(){
 	#Analyze tasks
 	print $File_Log "Analyzing tasks:\n";
 	for my $task (1 .. $#Tasks){ analyzeTask($task) }
+	#TODO: Analyze events
+	#TODO: Analyze persons
+	#TODO: Analyze room groups
+	#TODO: Analyze synonyms
+	#TODO: Analyze variables
+	#TODO: Analyze ALRs
 }
-#Analyze a room
 sub analyzeRoom($){
 	my $room		= shift;
 	my $exits		= @{ $Rooms[$room]{Exits} };
 	#Interpret the exit restrictions; sclibrar.lib_can_go
-	for my $direction (0 .. $#Compass_Direction){
+	for my $direction (0 .. $Story{Directions}-1){
 		my %exit = %{ $Rooms[$room]{Exits}[$direction] };
 		# Destination; 0 indicates no exit
 		my $destination	= $exit{Destination};
@@ -1398,24 +1251,23 @@ sub analyzeRoom($){
 		$Rooms[$room]{Exits}[$direction]{Restriction}	= $text if defined $text;
 	}
 }
-#Analyze an object
 sub analyzeObject($){
 	my $object			= shift;
-	#An object can be one of several types, depending on properties. We make this evaluation only once.
-	my $object_type;
-	#If object is in multiple rooms, it must be a backdrop (even if it is a container in ADRIFT)
-	if		($Objects[$object]{WhereType} eq 2
-		or	 $Objects[$object]{WhereType} eq 3){
-		$object_type	= 'backdrop';
+	{	# Determine object class based on properties	TODO
+		my $class;
+		#If object is in multiple rooms, it must be a backdrop (even if it is a container in ADRIFT)
+		if		($Objects[$object]{WhereType} eq 2
+			or	 $Objects[$object]{WhereType} eq 3){
+			$class	= 'backdrop';
+		}
+		#If object is classified as a body part, then we go with that
+		elsif	($Objects[$object]{WhereType} eq 4){
+			$class	= 'body part';
+		}
+		#Store what we've calculated
+		$Objects[$object]{Class}		= $class	if defined $class;
 	}
-	#If object is classified as a body part, then we go with that
-	elsif	($Objects[$object]{WhereType} eq 4){
-		$object_type	= 'body part';
-	}
-	#Store what we've calculated
-	$Objects[$object]{Type}		= $object_type;
 }
-#Analyze a task, taking a guess at what it's meant to do and find a suiting name for it
 sub analyzeTask($){
 	my $task			= shift;
 	my $locations		= @{ $Tasks[$task]{Where} };
@@ -1950,7 +1802,6 @@ sub analyzeTask($){
 					$value		= $expr;
 				}
 			}
-			
 			$text		= "Change $variable $operator $value";
 		}
 		#Score:			Modifier
@@ -2002,103 +1853,60 @@ sub analyzeTask($){
 		}
 		$Tasks[$task]{Actions}[$id]{Text}	= $text if defined $text;
 	}
-	#To decipher what the task is meant to do, we first check if we're given a translation that describes it.
-	my $task_type;
-	my $task_name;
-	($task_type, $task_name) = analyzeTaskType($Translate_Task[$task])	if defined $Translate_Task[$task];
-	#Otherwise we have to parse through all the commands to see if we find a fit.
-	foreach my $line (@commands){
-		last if defined $task_type;
-		($task_type, $task_name) = analyzeTaskType($line);
-	}
-	#If we're unable to decipher, we can generate a name from the longest command
-	unless (defined $task_name){
-		$task_name	= '';
-		$task_name	= variableName($Translate_Task[$task])	if defined $Translate_Task[$task];
-		foreach my $line (@commands){
-			$line		= variableName($line);
-			$task_name	= $line			if length($line) > length($task_name);
-		}
-	}
-	$Tasks[$task]{Name}		= $task_name if defined $task_name;
-	$Tasks[$task]{Type}		= $task_type if defined $task_type;
-	print $File_Log "\t".nameTask($task)." ($task)"	if defined $Option_Verbose;
-	print $File_Log " -> $task_name"				if defined $Option_Verbose && $task_name;
-	print $File_Log "\n"							if defined $Option_Verbose;
-	foreach my $line (@commands){ print $File_Log "\t\t$line\n"	if defined $Option_Verbose }
-}
-sub analyzeTaskType($){
-	my $line	= shift;
-	#CASE 1: The task simulates examining a body part.
-	#We expect this to take the following form:
-	#	x/examine [PERSON]('s) [BODYPART]
-	if($line =~ m/^(x|examine) ([a-z]*)('s)? (.*)$/i ){
-		my $action		= 'examine';
-		my $owner		= $2;
-		my $bodypart	= $4;
-		return (1, "$action $owner $bodypart");
-	}
-	#CASE 2: The task is an erotic action on a body part.
-	#We expect this to take the following form:
-	#	ACTION(ing) [PERSON]('s) [BODYPART]
-	if($line =~ m/^(touch|rubb?|tickle?|spank|pinch|lick|bite?|fuck|kiss|suck)(ing)? ([a-z]*)('s)? (.*)$/i ){
-		my $action		= $1 . 'ing';
-		my $owner		= $3;
-		my $bodypart	= $5;
-		return (2, "$action $owner $bodypart");
-	}
-	return (undef, undef);
-}
-##Output
-sub printSource(){
-	generateXML();			# Generate XML based on bytecode
-	generateInform();		# Generate equivalent Inform-source
+	#TODO Classify task by interpreting task name or commands
+}	
+##Generate output
+sub generate(){
+	generateXML();
+#TODO	generateInform();	
 }
 #Generate XML Output
 sub generateXML(){
-	print $File_Log "Printing XML File\n";
+	print $File_Log "Generating XML File\n";
 	writeXMLElementOpen('Story');
-	generateXMLGlobals();
-	generateXMLOptions();
+	generateXMLHeader();
 	generateXMLRooms();
 	generateXMLObjects();
 	generateXMLTasks();
+	generateXMLEvents();
+	#generateXMLGroup();
 	generateXMLPersons();
-	#generateXMLEvents();
 	generateXMLVariables();
 	writeXMLElementClose('Story');
 }
-#Generate the story part of the XML output
-sub generateXMLGlobals(){
-	writeXMLElementOpen('Globals');
-	writeXMLElement('Title',			$Game{Title});
-	writeXMLElement('Author',			$Game{Author});
-	writeXMLElement('Start_Location',	$Game{Start});
-	writeXMLElement('WaitingTurns',		$Game{WaitTurns});
-	writeXMLElement('Perspective',		$Game{Perspective});
-	writeXMLElement('Compiled',			$Game{CompileDate});
+sub generateXMLHeader(){
+	writeXMLElementOpen('Header');
+	writeXMLElement('Title',			$Story{Title});
+	writeXMLElement('Author',			$Story{Author});
+	writeXMLElement('Compiled',			$Story{CompileDate});
 	writeXMLElement('Decompiler',		$Decompiler_Version);
 	writeXMLElement('Decompiled',		''.localtime);
-	writeXMLElementClose('Globals');
+	writeXMLElement('StartLocation',	$Story{Start});
+	writeXMLElement('WaitingTurns',		$Story{WaitTurns});
+	writeXMLElement('Perspective',		$Story{Perspective});
+	{	#Options
+		writeXMLElementOpen('Options');
+		writeXMLElement('Battles')			if $Story{EnableBattle};
+		writeXMLElement('NoMap')			if $Story{DisableMap};
+		writeXMLElement('Sound')			if $Story{EnableSound};
+		writeXMLElement('Graphics')			if $Story{EnableGraphics};
+		writeXMLElement('ExpandedCompass')	if $Story{ExpandedCompass};
+		writeXMLElement('InitialLook')		if $Story{InitialLook};
+		writeXMLElement('ShowExits')		if $Story{ShowExits};
+		writeXMLElementClose('Options');
+	}
+	writeXMLElementClose('Header');
 }
-#Generate the options part of the XML output, based on game flags
-sub generateXMLOptions(){
-	writeXMLElementOpen('Options');
-	writeXMLElement('Battles')			if $Game{EnableBattle};
-	writeXMLElement('NoMap')			if $Game{DisableMap};
-	writeXMLElement('Sound')			if $Game{EnableSound};
-	writeXMLElement('Graphics')			if $Game{EnableGraphics};
-	writeXMLElement('ExpandedCompass')	if $Game{ExpandedCompass};
-	writeXMLElement('InitialLook')		if $Game{InitialLook};
-	writeXMLElement('ShowExits')		if $Game{ShowExits};
-	writeXMLElementClose('Options');
-}
-#Generate the rooms part of the XML output
 sub generateXMLRooms(){
-	print $File_XML "<!-- $#Rooms rooms -->\n";
+	print $File_XML "\n<!-- $#Rooms rooms -->";
 	writeXMLElementOpen('Rooms')	if $#Rooms;
 	for my $room (1 .. $#Rooms){
 		writeXMLElementOpen('Room');
+		if ($Option_Verbose){	#Verbose ID and name
+			print $File_XML "\t<!-- $room";
+			print $File_XML " ($Symbol_Room[$room])"	if defined $Symbol_Room[$room];
+			print $File_XML " -->";
+		}
 		{	#Attributes
 			writeXMLElementOpen('Attributes');
 			writeXMLElement('ID', 		$room);
@@ -2107,8 +1915,7 @@ sub generateXMLRooms(){
 			writeXMLElement('Hidden')	if $Rooms[$room]{Hidden};
 			writeXMLElementClose('Attributes');
 		}
-		{	#Descriptions
-			#TODO: Resource
+		{	#Descriptions	TODO Resources
 			writeXMLElementOpen('Descriptions');
 			#Default
 			writeXMLElementOpen('Description');
@@ -2117,23 +1924,23 @@ sub generateXMLRooms(){
 			#v3 style alternate descriptions
 			if($Rooms[$room]{AltDesc1Task}){
 				writeXMLElementOpen('Description');
-				writeXMLElement('Text',	$Rooms[$room]{AltDesc1});
-				writeXMLElement('Task',	$Rooms[$room]{AltDesc1Task});
-				writeXMLElement('Name',	nameTask($Rooms[$room]{AltDesc1Task}));
+				writeXMLElement('Text',		$Rooms[$room]{AltDesc1});
+				writeXMLElement('TaskID',	$Rooms[$room]{AltDesc1Task});
+				writeXMLElement('Task',		nameTask($Rooms[$room]{AltDesc1Task}));
 				writeXMLElementClose('Description');
 			}
 			if($Rooms[$room]{AltDesc2Task}){
 				writeXMLElementOpen('Description');
-				writeXMLElement('Text',	$Rooms[$room]{AltDesc2});
-				writeXMLElement('Task',	$Rooms[$room]{AltDesc2Task});
-				writeXMLElement('Name',	nameTask($Rooms[$room]{AltDesc2Task}));
+				writeXMLElement('Text',		$Rooms[$room]{AltDesc2});
+				writeXMLElement('TaskID',	$Rooms[$room]{AltDesc2Task});
+				writeXMLElement('Task',		nameTask($Rooms[$room]{AltDesc2Task}));
 				writeXMLElementClose('Description');
 			}
 			if($Rooms[$room]{AltDesc3Obj}){
 				writeXMLElementOpen('Description');
 				writeXMLElement('Text',		$Rooms[$room]{AltDesc3});
-				writeXMLElement('Object',	$Rooms[$room]{AltDesc3Obj});
-				writeXMLElement('Name',	nameObject( $ObjectPortable[ $Rooms[$room]{AltDesc3Obj}] ) );
+				writeXMLElement('ObjectID',	$Rooms[$room]{AltDesc3Obj});
+				writeXMLElement('Object',	nameObject( $ObjectPortable[ $Rooms[$room]{AltDesc3Obj}] ) );
 				writeXMLElementClose('Description');
 			}
 			#v4 style alternate descriptions
@@ -2143,10 +1950,8 @@ sub generateXMLRooms(){
 				writeXMLElementOpen('Description');
 				writeXMLElement('M1',			$alternates[$alternate]{M1});
 				writeXMLElement('Type',			$alternates[$alternate]{Type});
-				#TODO: Resource1
 				writeXMLElement('M2',			$alternates[$alternate]{M2});
 				writeXMLElement('Var2',			$alternates[$alternate]{Var2});
-				#TODO: Resource2
 				writeXMLElement('HideObjects',	$alternates[$alternate]{HideObjects});
 				writeXMLElement('Changed',		$alternates[$alternate]{Changed});
 				writeXMLElement('Var3',			$alternates[$alternate]{Var3});
@@ -2157,11 +1962,11 @@ sub generateXMLRooms(){
 		}
 		{	#Exits
 			writeXMLElementOpen('Exits');
-			foreach my $direction (0..$#Compass_Direction){
+			foreach my $direction (0..$Story{Directions}-1){
 				my $destination	= $Rooms[$room]{Exits}[$direction]{Destination};
 				if ($destination){
 					writeXMLElementOpen('Exit');
-					writeXMLElement('Direction',		$Compass_Direction[$direction]);
+					writeXMLElement('Direction',		$Symbol_Compass_Direction[$direction]);
 					writeXMLElement('DestinationID',	$destination);
 					writeXMLElement('Destination',		nameRoom($destination));
 					writeXMLElement('Restriction',		$Rooms[$room]{Exits}[$direction]{Restriction}) if defined $Rooms[$room]{Exits}[$direction]{Restriction};
@@ -2170,7 +1975,7 @@ sub generateXMLRooms(){
 			}
 			writeXMLElementClose('Exits');
 		}
-		{	#Relations
+		{	#Relations		TODO Remake
 			my @task_relations	= ();
 			for my $task (1..$#Tasks){ push @task_relations, $task if defined $RoomTasks[$room][$task] }
 			my $relations	= @task_relations;
@@ -2191,86 +1996,16 @@ sub generateXMLRooms(){
 	}
 	writeXMLElementClose('Rooms')	if $#Rooms;
 }
-#Generate the persons part of the XML output
-sub generateXMLPersons(){
-	print $File_XML "<!-- $#Persons persons (+ player) -->\n";
-	#TODO: Add the player
-	writeXMLElementOpen('Persons') if $#Persons;
-	for my $person (1 .. $#Persons){
-		writeXMLElementOpen('Person');
-		{	#Attributes
-			writeXMLElementOpen('Attributes');
-			writeXMLElement('ID',			$person);
-			writeXMLElement('Title',		$Persons[$person]{Name});
-			writeXMLElement('Name',			namePerson($person));
-			foreach my $alias ( @{$Persons[$person]{Alias} } ){
-				writeXMLElement('Alias',	$alias) unless $alias eq '';
-			}
-			writeXMLElement('Gender',		nameGender($Persons[$person]{Gender}));
-			writeXMLElement('Location_ID',	$Persons[$person]{StartRoom});
-			writeXMLElement('Location',		nameRoom($Persons[$person]{StartRoom}));
-			writeXMLElement('Presence',		$Persons[$person]{InRoomText});
-			writeXMLElement('Entering',		$Persons[$person]{EnterText});
-			writeXMLElement('Leaving',		$Persons[$person]{ExitText});
-			writeXMLElementClose('Attributes');
-		}
-		#TODO: BattleStats
-		{	#Descriptions
-			#TODO: Resource
-			writeXMLElementOpen('Descriptions');
-			writeXMLElementOpen('Description');
-			writeXMLElement('Text',	$Persons[$person]{Description});
-			writeXMLElementClose('Description');
-			if($Persons[$person]{AltDescTask}){
-				writeXMLElementOpen('Description');
-				writeXMLElement('Text',		$Persons[$person]{AltDesc});
-				writeXMLElement('TaskID',	$Persons[$person]{AltDescTask});
-				writeXMLElement('TaskName',	nameTask($Persons[$person]{AltDescTask}));
-				writeXMLElementClose('Description');
-			}
-			writeXMLElementClose('Descriptions');
-		}
-		{	#Topics
-			writeXMLElementOpen('Topics');
-			foreach my $topic ( @{$Persons[$person]{Topics} } ){
-				writeXMLElementOpen('Topic');
-				writeXMLElement('Subject',		$topic->{Subject});
-				writeXMLElement('Reply',		$topic->{Reply});
-				writeXMLElement('Reply_Alt',	$topic->{AltReply})			if $topic->{Task};
-				writeXMLElement('Task',			$topic->{Task})				if $topic->{Task};
-				writeXMLElement('Task_Name',	nameTask($topic->{Task}))	if $topic->{Task};
-				writeXMLElementClose('Topic');
-			}
-			writeXMLElementClose('Topics');
-		}
-		#TODO: Walks
-		{	#Relations
-			my @task_relations	= ();
-			for my $task (1..$#Tasks){ push @task_relations, $task if defined $TaskPersons[$task][$person] }
-			my $relations	= @task_relations;
-			writeXMLElementOpen('Relations')	if $relations;
-			{	#Tasks
-				writeXMLElementOpen('Tasks')		if @task_relations;
-				for my $task (@task_relations) {
-					writeXMLElementOpen('Task');
-					writeXMLElement('ID', $task);
-					writeXMLElement('Name', nameTask($task));
-					writeXMLElementClose('Task');
-				}
-				writeXMLElementClose('Tasks')		if @task_relations;
-			}
-			writeXMLElementClose('Relations')	if $relations;
-		}
-		writeXMLElementClose('Person');
-	}
-	writeXMLElementClose('Persons')	if $#Persons;
-}
-#Generate the objects part of the XML output
 sub generateXMLObjects(){
-	print $File_XML "<!-- $#Objects objects -->\n";
+	print $File_XML "\n<!-- $#Objects objects -->";
 	writeXMLElementOpen('Objects') if $#Objects;
 	for my $object (1 .. $#Objects){
 		writeXMLElementOpen('Object');
+		if ($Option_Verbose){	#Verbose ID and name
+			print $File_XML "\t<!-- $object";
+			print $File_XML " ($Symbol_Object[$object])"	if defined $Symbol_Object[$object];
+			print $File_XML " -->";
+		}
 		{	#Attributes
 			writeXMLElementOpen('Attributes');
 			writeXMLElement('ID',			$object);
@@ -2280,7 +2015,7 @@ sub generateXMLObjects(){
 			foreach my $alias ( @{$Objects[$object]{Alias} } ){
 				writeXMLElement('Alias',	$alias) unless $alias eq '';
 			}
-			writeXMLElement('Type',			$Objects[$object]{Type})		if defined $Objects[$object]{Type};
+			writeXMLElement('Class',		$Objects[$object]{Class})		if defined $Objects[$object]{Class};
 			writeXMLElement('Static')		if $Objects[$object]{Static};
 			writeXMLElement('Portable')		unless $Objects[$object]{Static};
 			writeXMLElement('Container')	if $Objects[$object]{Container};
@@ -2296,7 +2031,7 @@ sub generateXMLObjects(){
 			writeXMLElement('Capacity',		$Objects[$object]{Capacity});
 			writeXMLElement('SizeWeight',	$Objects[$object]{SizeWeight});
 			writeXMLElement('Openable',		$Objects[$object]{Openable});	#TODO: Translate
-			writeXMLElement('Key',			$Objects[$object]{Key})			if defined $Objects[$object]{Key};
+			writeXMLElement('KeyID',		$Objects[$object]{Key})			if defined $Objects[$object]{Key};
 			writeXMLElement('InRoomDesc',	$Objects[$object]{InRoomDesc})	unless $Objects[$object]{InRoomDesc} eq '';
 			writeXMLElement('OnlyWhenNotMoved')		if $Objects[$object]{OnlyWhenNotMoved};
 #TODO: Resources, BattleStats
@@ -2343,7 +2078,7 @@ sub generateXMLObjects(){
 			writeXMLElementClose('Descriptions');
 			writeXMLElementClose('Object');
 		}
-		{	#Relations
+		{	#Relations		TODO Remake
 			my @task_relations	= ();
 			for my $task (1..$#Tasks){ push @task_relations, $task if defined $ObjectTasks[$object][$task] }
 			my $relations	= @task_relations;
@@ -2363,12 +2098,16 @@ sub generateXMLObjects(){
 	}
 	writeXMLElementClose('Objects') if $#Objects;
 }
-#Generate the tasks part of the XML output
 sub generateXMLTasks(){
-	print $File_XML "<!-- $#Tasks tasks -->\n";
+	print $File_XML "\n<!-- $#Tasks tasks -->";
 	writeXMLElementOpen('Tasks') if $#Tasks;
 	for my $task (1 .. $#Tasks){
 		writeXMLElementOpen('Task');
+		if ($Option_Verbose){	#Verbose ID and name
+			print $File_XML "\t<!-- $task";
+			print $File_XML " ($Symbol_Task[$task])"	if defined $Symbol_Task[$task];
+			print $File_XML " -->";
+		}
 		{	#Attributes
 			writeXMLElementOpen('Attributes');
 			writeXMLElement('ID',			$task);
@@ -2443,7 +2182,7 @@ sub generateXMLTasks(){
 				writeXMLElementClose('Actions');
 			}
 		}
-		{	#Relations
+		{	#Relations		TODO Remake
 			my @room_relations	= ();
 			for my $room (1..$#Rooms){ push @room_relations, $room if defined $RoomTasks[$room][$task] }
 			my @object_relations	= ();
@@ -2501,12 +2240,117 @@ sub generateXMLTasks(){
 	}
 	writeXMLElementClose('Tasks') if $#Tasks;
 }
-#Generate the tasks part of the XML output
+sub generateXMLEvents(){
+	print $File_XML "\n<!-- $#Events events -->";
+	writeXMLElementOpen('Events') if $#Events;
+	for my $event (1 .. $#Events){
+		writeXMLElementOpen('Event');
+		if ($Option_Verbose){	#Verbose ID and name
+			print $File_XML "\t<!-- $event";
+			print $File_XML " ($Symbol_Event[$event])"	if defined $Symbol_Event[$event];
+			print $File_XML " -->";
+		}
+		{	#Attributes
+			writeXMLElementOpen('Attributes');
+			writeXMLElement('ID',			$event);
+			writeXMLElement('Name',			nameEvent($event));
+			writeXMLElement('Title',		$Events[$event]{Short});
+			writeXMLElement('Type',			$Events[$event]{StarterType});
+			writeXMLElement('Restart',		$Events[$event]{RestartType});
+			writeXMLElementClose('Attributes');
+		}
+		#TODO
+		writeXMLElementClose('Event');
+	}
+	writeXMLElementClose('Events') if $#Events;
+}
+sub generateXMLPersons(){
+	print $File_XML "\n<!-- $#Persons non-player persons -->";
+	#TODO: Add the player
+	writeXMLElementOpen('Persons') if $#Persons;
+	for my $person (1 .. $#Persons){
+		writeXMLElementOpen('Person');
+		if ($Option_Verbose){	#Verbose ID and name
+			print $File_XML "\t<!-- $person";
+			print $File_XML " ($Symbol_Person[$person])"	if defined $Symbol_Person[$person];
+			print $File_XML " -->";
+		}
+		{	#Attributes
+			writeXMLElementOpen('Attributes');
+			writeXMLElement('ID',			$person);
+			writeXMLElement('Title',		$Persons[$person]{Name});
+			writeXMLElement('Name',			namePerson($person));
+			foreach my $alias ( @{$Persons[$person]{Alias} } ){
+				writeXMLElement('Alias',	$alias) unless $alias eq '';
+			}
+			writeXMLElement('Gender',		nameGender($Persons[$person]{Gender}));
+			writeXMLElement('RoomID',		$Persons[$person]{StartRoom});
+			writeXMLElement('Room',			nameRoom($Persons[$person]{StartRoom}));
+			writeXMLElement('Presence',		$Persons[$person]{InRoomText});
+			writeXMLElement('Entering',		$Persons[$person]{EnterText});
+			writeXMLElement('Leaving',		$Persons[$person]{ExitText});
+			writeXMLElementClose('Attributes');
+		}
+		#TODO: BattleStats
+		{	#Descriptions	TODO Resource
+			writeXMLElementOpen('Descriptions');
+			writeXMLElementOpen('Description');
+			writeXMLElement('Text',	$Persons[$person]{Description});
+			writeXMLElementClose('Description');
+			if($Persons[$person]{AltDescTask}){
+				writeXMLElementOpen('Description');
+				writeXMLElement('Text',		$Persons[$person]{AltDesc});
+				writeXMLElement('TaskID',	$Persons[$person]{AltDescTask});
+				writeXMLElement('TaskName',	nameTask($Persons[$person]{AltDescTask}));
+				writeXMLElementClose('Description');
+			}
+			writeXMLElementClose('Descriptions');
+		}
+		{	#Topics
+			writeXMLElementOpen('Topics');
+			foreach my $topic ( @{$Persons[$person]{Topics} } ){
+				writeXMLElementOpen('Topic');
+				writeXMLElement('Subject',		$topic->{Subject});
+				writeXMLElement('Reply',		$topic->{Reply});
+				writeXMLElement('Reply_Alt',	$topic->{AltReply})			if $topic->{Task};
+				writeXMLElement('Task',			$topic->{Task})				if $topic->{Task};
+				writeXMLElement('Task_Name',	nameTask($topic->{Task}))	if $topic->{Task};
+				writeXMLElementClose('Topic');
+			}
+			writeXMLElementClose('Topics');
+		}
+		#TODO: Walks
+		{	#Relations		TODO Remake
+			my @task_relations	= ();
+			for my $task (1..$#Tasks){ push @task_relations, $task if defined $TaskPersons[$task][$person] }
+			my $relations	= @task_relations;
+			writeXMLElementOpen('Relations')	if $relations;
+			{	#Tasks
+				writeXMLElementOpen('Tasks')		if @task_relations;
+				for my $task (@task_relations) {
+					writeXMLElementOpen('Task');
+					writeXMLElement('ID', $task);
+					writeXMLElement('Name', nameTask($task));
+					writeXMLElementClose('Task');
+				}
+				writeXMLElementClose('Tasks')		if @task_relations;
+			}
+			writeXMLElementClose('Relations')	if $relations;
+		}
+		writeXMLElementClose('Person');
+	}
+	writeXMLElementClose('Persons')	if $#Persons;
+}
 sub generateXMLVariables(){
-	print $File_XML "<!-- $#Variables tasks -->\n";
+	print $File_XML "\n<!-- $#Variables variables -->";
 	writeXMLElementOpen('Variables') if $#Variables;
 	for my $variable (1 .. $#Variables){
 		writeXMLElementOpen('Variable');
+		if ($Option_Verbose){	#Verbose ID and name
+			print $File_XML "\t<!-- $variable";
+			print $File_XML " ($Symbol_Variable[$variable])"	if defined $Symbol_Variable[$variable];
+			print $File_XML " -->";
+		}
 		{	#Attributes
 			writeXMLElementOpen('Attributes');
 			writeXMLElement('ID',			$variable);
@@ -2536,298 +2380,121 @@ sub generateXMLVariables(){
 	}
 	writeXMLElementClose('Variables');
 }
-
-#Write a one line XML element with the specified title and content.
+##Utility
+#Symbolic Name Lookups
+sub nameRoom($){
+	my $id	= shift;
+	return 'UnknownRoom'			unless defined $id;
+	return $Symbol_Room[$id]		if defined $Symbol_Room[$id];
+	return "Room$id";
+}
+sub nameObject($){
+	my $id	= shift;
+	return 'UnknownObject'			unless defined $id;
+	return $Symbol_Object[$id]		if defined $Symbol_Object[$id];
+	return "Object$id";
+}
+sub nameTask($){
+	my $id	= shift;
+	return 'UnknownTask'			unless defined $id;
+	return $Symbol_Task[$id]		if defined $Symbol_Task[$id];
+	return "Task$id";
+}
+sub nameEvent($){
+	my $id	= shift;
+	return 'UnknownEvent'			unless defined $id;
+	return $Symbol_Event[$id]		if defined $Symbol_Event[$id];
+	return "Event$id";
+}
+sub namePerson($){
+	my $id	= shift;
+	return 'UnknownPerson'			unless defined $id;
+	return $Symbol_Person[$id]		if defined $Symbol_Person[$id];
+	return "Person$id";
+}
+sub nameGroup($){
+	my $id	= shift;
+	return 'UnknownGroup'			unless defined $id;
+	return $Symbol_Group[$id]		if defined $Symbol_Group[$id];
+	return "Group$id";
+}
+sub nameVariable($){
+	my $id	= shift;
+	return 'UnknownVariable'		unless defined $id;
+	return $Symbol_Variable[$id]	if defined $Symbol_Variable[$id];
+	return "Variable$id";
+}
+sub nameGender($){
+	my $id	= shift;
+	return 'UnknownGender'			unless defined $id;
+	return $Symbol_Gender[$id]		if defined $Symbol_Gender[$id];
+	print $File_Log "WARNING: Unknown gender ID=$id\n";
+	return "person";
+}
+#XML Handling
 sub writeXMLElement($;$){
-	my $title	= shift;
+	#Write a single-line XML element with content
+	my $element	= shift;
 	my $content	= shift;
 	undef $content	if defined $content && $content eq '';
 	if (defined $content){
 		#Convert brackets
 		$content =~ s/</\[/g;
 		$content =~ s/>/\]/g;
-		#Indentation
+		#New line and indentation
+		print $File_XML "\n";
 		$File_XML_Indent++;
 		foreach (1..$File_XML_Indent) { print $File_XML "\t" }
 		#Write content wrapped in element
-		print $File_XML "<$title>";
+		print $File_XML "<$element>";
 		print $File_XML $content;
-		print $File_XML "</$title>\n";
+		print $File_XML "</$element>";
 		$File_XML_Indent--;
 	}
 	else{
-		writeXMLElementEmpty($title);
+		writeXMLElementEmpty($element);
 	}
 }
 sub writeXMLElementEmpty($){
-	my $title	= shift;
+	#Write an empty single-line XML element
+	my $element	= shift;
+	#New line and indentation
+	print $File_XML "\n";
 	$File_XML_Indent++;
 	foreach (1..$File_XML_Indent) { print $File_XML "\t" }
-	print $File_XML "<$title />\n";
+	#Write element
+	print $File_XML "<$element />";
 	$File_XML_Indent--;
 }
 sub writeXMLElementOpen($){
-	my $title	= shift;
+	my $element	= shift;
+	#New line and indentation
+	print $File_XML "\n";
 	$File_XML_Indent++;
 	foreach (1..$File_XML_Indent) { print $File_XML "\t" }
-	print $File_XML "<$title>\n";
+	print $File_XML "<$element>";
 }
 sub writeXMLElementClose($;$){
-	my $title	= shift;
+	my $element	= shift;
+	#New line and indentation
+	print $File_XML "\n";
 	foreach (1..$File_XML_Indent) { print $File_XML "\t" }
-	print $File_XML "</$title>\n";
+	print $File_XML "</$element>";
 	$File_XML_Indent--;
 }
 
-#Generate Natural Inform output
-sub generateInform(){
-	print $File_Log "Printing Natural Inform File\n";
-	generateInformIntro();
-	#Start off with the first Volume
-	print $File_Inform "\nVolume 1 - Act I\n";
-	generateInformLocations();
-	generateInformInhabitants();
-	generateInformMechanics();
-	generateInformChronology();
-}
-#Generate the introductionary setup of the Inform file
-sub generateInformIntro(){
-	#Title and author from input file
-	print $File_Inform "\"$Game{Title}\" by $Game{Author}\n";
-	#Write setup section
-	print $File_Inform "\nVolume 0 - Setup\n\n";
-	#Default import and options
-	print $File_Inform "Use American dialect, full-length room descriptions, and the serial comma.\n";
-	print $File_Inform "Use unabbreviated object names.\n";
-	print $File_Inform "Use consensual persuasion. [Defer persuasion to consent for the actions that require consent.]\n\n";
-	print $File_Inform "Include Directionality by Fictitious Frode.\n";
-	print $File_Inform "Include Erotic Storytelling by Fictitious Frode.\n";
-	print $File_Inform "Include Simple Conversations by Fictitious Frode.\n";
-	#Titlepage
-	print $File_Inform "\nBook 0.1 - Titlepage\n";
-	#Metadata, partly from input file
-	print $File_Inform "\nPart 0.1.1 - Metadata\n\n";
-	print $File_Inform "The story creation year is ".substr($Game{CompileDate}, -4).".\n";
-	print $File_Inform "The story genre is \"Erotica\".\n";
-	print $File_Inform "The story headline is \"Decompiled $FileName_Compiled (ADRIFT v$Gamefile_Version) by v$Decompiler_Version\".\n";
-	print $File_Inform "The story description is \"A short introduction giving the premise of the story. Will be used in the out-of-game titlecard.\"\n";
-	print $File_Inform "The release number is 0.\n";
-	#Contents
-	print $File_Inform "\nPart 0.1.2 - Contents\n\n";
-	print $File_Inform "[The story contents are based on guesswork and should be manually updated. TODO]\n";
-	#Dramatis Personae
-	print $File_Inform "\nPart 0.1.3 - Dramatis Personae\n\n";
-	print $File_Inform "[Defining the actors taking part in the story.]\n";
-	#TODO: The player
-	for my $person (1 .. $#Persons){
-		print $File_Inform namePerson($person)." is a ".nameGender($Persons[$person]{Gender});
-		print $File_Inform ".\n" 													unless	$Persons[$person]{StartRoom};
-		print $File_Inform " in ". nameRoom($Persons[$person]{StartRoom}) .".\n"	if		$Persons[$person]{StartRoom};
-	}
-	#Dramatis Personae
-	print $File_Inform "\nPart 0.1.4 - Conversation Subjects\n\n";
-	print $File_Inform "[Defining the general conversation subjects relevant to the story.]\n";
-	#TODO - For each topic identified by the analysis, print the definition here
-	#Declarations
-	print $File_Inform "\nBook 0.2 - Declarations\n";
-	#Body Parts
-	print $File_Inform "\nPart 0.2.1 - Body Part Creation\n\n";
-	#TODO - For each body part type identified by the analysis, print the definition here
-	#Custom properties
-	print $File_Inform "\nPart 0.2.2 - Custom Properties\n\n";
-	print $File_Inform "[Any story-wide custom properties should go here.]\n";
-	#Quality of Life statements
-	print $File_Inform "\nBook 0.3 - A Helping Hand\n";
-	#Text Substitutions
-	print $File_Inform "\nPart 0.3.1 - Text Substitutions\n\n";
-	print $File_Inform "To say i -- beginning say_i -- running on: (- style underline; -).\n";
-	print $File_Inform "To say /i -- ending say_i -- running on: (- style roman; -).\n";
-	print $File_Inform "To say b -- beginning say_b -- running on: (- style bold; -).\n";
-	print $File_Inform "To say /b -- ending say_b -- running on: (- style roman; -).\n";
-	#Text Substitutions
-	print $File_Inform "\nPart 0.3.2 - Movement\n\n";
-	print $File_Inform "[Make exit mean go outside.]\n";
-	print $File_Inform "Instead of exiting when the player is not in something:\n\t	Try going outside instead;\n";
-	#Math
-	print $File_Inform "\nPart 0.3.3 - Math\n\n";
-	print $File_Inform "To decide if (X - A number) is between (low - a number) and (high - a number):\n\tIf X >= low and X <= high, decide yes;\n\tDecide no;\n";
-}
-#Generate the locations book of the Inform file
-sub generateInformLocations(){
-	print $File_Inform "\nBook 1.1 - Locations\n\n";
-	print $File_Inform "[The locations for the story, divided into one parts for each distinct region with chapters for each room.]\n";
-	print $File_Inform "\nPart 1.1.1 - Main Region\n";
-	generateInformRoomRecursive($Game{Start});
-	#TODO Look for unprinted rooms, create a new region for each and add the rooms
-}
-#Generate a room in the Inform output, then recurse through all the exits
-sub generateInformRoomRecursive($);
-sub generateInformRoomRecursive($){
-	my $room	= shift;
-	#Check if room is generated
-	return if defined $Rooms[$room]{i7generated};
-	$Rooms[$room]{i7generated}	= 1;
-	#Loop through compass directions to find all exits to the room, sorting into unvisited to recurse to and relations to existing rooms.
-	my @unvisited	= ();
-	my $relations	= 'is ';
-	#TODO: For now we assume that all exits are bi-directional
-	foreach my $direction (0..$#Compass_Direction){
-		my $destination	= $Rooms[$room]{Exits}[$direction]{Destination};
-		if ($destination){
-			#TODO: We don't take task restrictions into account
-			if (defined $Rooms[$destination]{i7generated}){
-				#Destination is generated; add to relations
-				$relations .= ' and '	unless $relations eq 'is ';
-				$relations .= $Compass_Reversed[$direction] . ' ' . nameRoom($destination);
-			}
-			else {
-				#Destination is not generated, add to recursion list
-				push @unvisited, $destination;
-			}
-		}
-	}
-	#Declare as a room if there are no relations
-	$relations .= 'a room'	if $relations eq 'is ';
-	#Print out the room
-	print $File_Inform "\nChapter - $Rooms[$room]{Title}\n\n";
-	print $File_Inform "[Room$room]\n";
-	print $File_Inform nameRoom($room) . " $relations.\n";
-	print $File_Inform "The printed name is \"$Rooms[$room]{Title}\".\n" unless nameRoom($room) eq $Rooms[$room]{Title};
-	#TODO: Alternate descriptions
-	print $File_Inform "\"$Rooms[$room]{Description}\".\n";
-	#TODO: Room Contents
-	#TODO: Movement Restrictions
-	#Call recursive generation of unvisited rooms
-	foreach my $destination (@unvisited){ generateInformRoomRecursive($destination) }
-	#TODO: Section - Contents
-	#TODO: Section - Movement Restrictions
-}
-
-#Generate the inhabitant book of the Inform file
-sub generateInformInhabitants(){
-	print $File_Inform "\nBook 1.2 - Inhabitants\n\n";
-	print $File_Inform "[The actors, one part for each.]\n";
-}
-#Generate the mechanics book of the Inform file
-sub generateInformMechanics(){
-	print $File_Inform "\nBook 1.3 - Mechanics\n\n";
-	print $File_Inform "[Any mechanics pertaining to the act, one part for each main feature.]\n";
-	#Metadata, partly from input file
-	print $File_Inform "\nPart 1.3.1 - Task Overview\n\n";
-	print $File_Inform "[Mapping ADRIFT tasks to actions in Inform is error-prone; what follows is an overview of each task and how it is mapped.]\n";
-}
-#Generate the chronology book of the Inform file
-sub generateInformChronology(){
-	print $File_Inform "\nBook 1.4 - Chronology\n\n";
-	print $File_Inform "[Break the act into scenes.]\n";
-	#As there is no clue to scening from ADRIFT, we put everything we have into the prologue
-	print $File_Inform "\nPart 1.4.1 - Progression\n\n";
-	print $File_Inform "[The scenes dealing with the story progression]\n";
-	#As there is no clue to scening from ADRIFT, we put everything we have into the prologue
-	print $File_Inform "\nChapter 1.4.1a - Prologue\n\n";
-	print $File_Inform "Prologue is a scene.\nPrologue begins when play begins.\n";
-	print $File_Inform "When prologue begins:\n\tSay \"".informString($Game{Intro})."\";\n\n";
-	print $File_Inform "When prologue ends:\n\tSay \"".informString($Game{Ending})."\";\n\n";
-	#TODO: Sex-scenes
-}
-#Take in a string and convert it into printing in Inform
-sub informString($){
-	my $text		= shift;
-	#TODO
-	return $text;
-}
 ##Main Program Loop
-#Parse command-line arguments
-for (;;) {
-	if		($#ARGV >= 1 && $ARGV[0] eq '-s') {		# Read symbol mapping file
-		$FileName_Mapping	= $ARGV[1];
-		splice(@ARGV, 0, 2);
-	}
-	elsif	($#ARGV >= 0 && $ARGV[0] eq '+s') {		# Create symbol file template
-		$Option_Generate	= 1;
-		splice(@ARGV, 0, 1);
-	}
-	elsif($#ARGV >= 0 && $ARGV[0] eq '-a') {		# Aggressive naming
-		$Option_Naming		= 1;
-		splice(@ARGV, 0, 1);
-	}
-	elsif($#ARGV >= 0 && $ARGV[0] eq '-v') {		# Verbose
-		$Option_Verbose		= 1;
-		splice(@ARGV, 0, 1);
-	}
-	elsif($#ARGV >= 0 && $ARGV[0] eq '-m') {		# Minimalist mode
-		$Option_Minimal		= 1;
-		splice(@ARGV, 0, 1);
-	}
-	elsif($#ARGV >= 0 && $ARGV[0] eq '+r') {		# Rawdump mode
-		$Option_Rawdump		= 1;
-		splice(@ARGV, 0, 1);
-	}
-	else { last }
-}
-$FileName_Compiled	= $ARGV[0];	# There should be only one argument left, giving the name of the file to parse.
-die "Use: adrift [options] file.taf\n$Options" if ($#ARGV != 0);	# Too many unparsed arguments
-
-#Determine names to use
-$FileName_Path	= './';	# Default to no directory
-if ($ARGV[0] =~ m/([-_\w\s]*)\.(taf)/i) {	# Use the name of the input file if possible
-	$FileName_Log			= $1 . '.log';
-	$FileName_Generate		= $1 . '.sym'	if defined $Option_Generate;
-	$FileName_Decompiled	= $1 . '.src'	if defined $Option_Rawdump;
-	$FileName_XML			= $1 . '.xml';
-	$FileName_Inform		= $1 . '.ni';
-	$FileName_Path			= $1 . '/'	unless defined $Option_Minimal;
-}
-else{
-	$FileName_Log			= 'decompile.log';
-	$FileName_Generate		= 'decompile.sym'	if defined $Option_Generate;
-	$FileName_Decompiled	= 'decompile.src'	if defined $Option_Rawdump;
-	$FileName_XML			= 'story.xml';
-	$FileName_Inform		= 'story.ni';
-	$FileName_Path			= 'decoded/'	unless defined $Option_Minimal;
-}
-
-#Some sanity checking
-die "$FileName_Compiled is not a valid file"	unless -f $FileName_Compiled;
-die "Overwriting existing symbol file with autogenerated is not supported in minimal mode"
-	if defined $FileName_Generate && $Option_Minimal && -e $FileName_Generate ;
-
-#Create output path
-mkdir $FileName_Path						unless -e $FileName_Path;
-die "$FileName_Path is not a valid path"	unless -d $FileName_Path;
-
-#Open file handles
-open($File_Log, "> :raw :bytes :unix", $FileName_Path . $FileName_Log) # Use :unix to flush the log as we write to it
-	or die "$0: can't open $FileName_Path$FileName_Log for writing: $!";
-
-print "Parsing $FileName_Compiled\n";
-open($File_Compiled, "< :raw :bytes", $FileName_Compiled)
-	or die("Couldn't open $FileName_Compiled for reading: $!");
-open($File_Decompiled, "> :raw :bytes", $FileName_Path . $FileName_Decompiled)
-	or die "$0: can't open $FileName_Path$FileName_Decompiled for writing: $!"
-	if defined $Option_Rawdump;
-readFile();										# Read the file, determining version from signature
-close($File_Compiled);
-close($File_Decompiled) if defined $Option_Rawdump;
-#preloadConstants();							# Populate arrays with constants
+initialize();		# Parse command line arguments for options and filename
+print "Preparing to read $FileName_Compiled\n";
+openFiles();		# Open file handles
+determineVersion();	# Read the header to determine version
+print "Reading...\n";
+loadFile();			# Read the compiled file into memory and close input files
+loadSymbols();		# Parse the translation mapping file
+print "Parsing...\n";
+parse();			# Parse the compiled file into memory structure
 print "Analyzing...\n";
-parseFile();									# Parse the input file into the local data structures
-#TODO	parseMapping() if defined $FileName_Mapping;	# Read symbol file if called for
-open($File_Mapping, "> :raw :bytes", $FileName_Path . $FileName_Generate)
-	|| die "$0: can't open " . $FileName_Path . $FileName_Generate . "for writing: $!"
-	if defined $Option_Generate;
-translate();
-analyze();
-print "Writing results...\n";
-open($File_Inform, "> :raw :bytes", $FileName_Path . $FileName_Inform)
-	or die "$0: can't open $FileName_Path$FileName_Inform for writing: $!";
-open($File_XML, "> :raw :bytes", $FileName_Path . $FileName_XML)
-	or die "$0: can't open $FileName_Path$FileName_XML for writing: $!";
-writeMapping()		 if defined $Option_Generate;
-close($File_Mapping) if defined $Option_Generate;
-printSource();
-#Close file output
-close($File_Inform);
-close($File_XML);
-close($File_Log);
+analyze();			# Deeper analysis that depends on the entire story being parsed
+print "Generating output...\n";
+generate();			# Generate output and close the files
 print "Decompiling completed in ".(time - $Time_Start)." seconds.\n";
