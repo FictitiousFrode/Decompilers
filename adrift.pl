@@ -10,7 +10,7 @@ use Carp;					# For stack tracing at errors
 my $Time_Start	= time();	# Epoch time for start of processing
 
 ##Version History
-my $Decompiler_Version		= '0.12';
+my $Decompiler_Version		= '0.14';
 #v0.1:	Initial structure for flow and storage
 #v0.2:	Signature parsing, inflation/decryption of source
 #v0.3:	Raw dump
@@ -23,10 +23,12 @@ my $Decompiler_Version		= '0.12';
 #v0.10: Improved output to XML and Inform
 #v0.11:	Improved parsing of actions and restrictions
 #v0.12:	Code restructuring
+#v0.13: Symbol generation
+#v0.14: Improved references
 
 ##Global Variables
 #Story Settings
-my $Compiler_Version;		# The version used to compile the storyfile
+my $Container_Version;				# The version used to contain the storyfile
 
 #Story Data
 my %Story;
@@ -44,18 +46,12 @@ my @ALRs 			= ( undef );	# Contains the ALR objects for the story, starting from
 my @ObjectStatic		= ( 0 );	# Mapping from static object ID to actual object ID
 my @ObjectPortable		= ( 0 );	# Mapping from non-static object ID to actual object ID
 my @ObjectOpenable		= ( 0 );	# Mapping from openable object ID to actual object ID
+my @ObjectStateful		= ( 0 );	# Mapping from stateful object ID to actual object ID
 my @ObjectContainer		= ( 0 );	# Mapping from container object ID to actual object ID
 my @ObjectSurface		= ( 0 );	# Mapping from surface object ID to actual object ID
 my @ObjectHolder		= ( 0 );	# Mapping from holder/parent object ID to actual object ID
 my @ObjectLieable		= ( 0 );	# Mapping from lieable object ID to actual object ID
 my @ObjectSitStandable	= ( 0 );	# Mapping from sit/standable object ID to actual object ID
-
-#Relationships
-my @RoomTasks		= ();
-my @ObjectTasks		= ();
-my @TaskPersons		= ();
-my @TaskGroups		= ();
-my @TaskVariables	= ();
 
 #Symbol Translation Names
 my @Symbol_Room;					# Translation names for rooms
@@ -67,38 +63,34 @@ my @Symbol_Group;					# Translation names for room groups
 my @Symbol_Variable;				# Translation names for variables
 
 #Static Symbol Names
-my @Symbol_Compass_Direction;		# Names of the compass directions
-my @Symbol_Compass_Reversed;		# Names of the reversed compass directions
-my @Symbol_Gender;
+my @Symbol_Compass_Direction;		# Symbolic names for compass directions
+my @Symbol_Compass_Reversed;		# Symbolic names for reversed compass directions
+my @Symbol_Gender;					# Symbolic names for genders
 
 #Constants
-my %Signature		= ();
-$Signature{Size}	= 14;
-$Signature{Extra}	= 8;
-$Signature{Base}	= chr(0x3c).chr(0x42).chr(0x3f).chr(0xc9).chr(0x6a).chr(0x87).chr(0xc2).chr(0xcf);
-$Signature{V400}	= $Signature{Base}.chr(0x93).chr(0x45).chr(0x3e).chr(0x61).chr(0x39).chr(0xfa);
-$Signature{V390}	= $Signature{Base}.chr(0x94).chr(0x45).chr(0x37).chr(0x61).chr(0x39).chr(0xfa);
-$Signature{V380}	= $Signature{Base}.chr(0x94).chr(0x45).chr(0x36).chr(0x61).chr(0x39).chr(0xfa);
+my @Versions		= ();			# Printable names for each compiler version, ascending order
+my @Signatures		= ();			# Header signatures for each compiler version, corresponsing to @Versions
 my %PRNG			= ();
 $PRNG{Constant1} 	= 0x43fd43fd;
 $PRNG{Constant2} 	= 0x00c39ec3;
 $PRNG{Constant3} 	= 0x00ffffff;
 $PRNG{Initial}		= 0x00a09e86;
-$PRNG{State}		= 0x00a09e86;
+$PRNG{State}		= $PRNG{Initial};
 
 #File handling
 my $FileName_Compiled;		# Filename for the compiled gamefile to decompile
 my $FileName_Path	= './';	# Path to place output files in
 my $FileName_Decompiled;	# Filename for the decompiled sourcecode
 my $FileName_Log;			# Filename for the log
-my $FileName_Symbol;		# Filename for the symbol mapping translation input file
-my $FileName_Symbol_Gen;	# Filename for the symbol mapping translation output file
+my $FileName_Symbol_In;		# Filename for the symbol mapping translation input file
+my $FileName_Symbol_Out;	# Filename for the symbol mapping translation output file
 my $FileName_I7;			# Filename for the Inform output
 my $FileName_XML;			# Filename for the XML output
 my $File_Compiled;			# File handle for input compiled gamefile
 my $File_Log;				# File handle for logging output
 my $File_Decompiled;		# File handle for output decompiled sourcecode
-my $File_Symbol;			# File handle for symbol mapping translation (both input and output)
+my $File_Symbol_In;			# File handle for symbol mapping translation input
+my $File_Symbol_Out;		# File handle for symbol mapping translation output
 my $File_I7;				# File handle for Inform output
 my $File_XML;				# File handle for XML output
 my $File_XML_Indent	= -1;	# Storing the indentation level of the XML file
@@ -112,7 +104,7 @@ my $Option_Verbose;		# Extra information dumped to story file
 $Options	.= "-v\t\tVerbose loging output\n";
 my $Option_Naming;		# Be extra aggressive on trying to determine names
 						# TODO: This will create duplicate names, remake to avoid that
-$Options	.= "-a\t\tAggressive naming of objects and properties\n";
+$Options	.= "-a\t\tAggressive search for symbol names\n";
 my $Option_Rawdump;		# Dump raw decompiled source
 $Options	.= "+r\t\tRaw dump of decompiled source\n";
 my $Option_Generate;	# Generate a new symbol file
@@ -125,6 +117,7 @@ my $Lines_Next;				# Index of next entry in @Lines
 my $Terminator;				# String indicating end of multi-line value
 #Next single-line value
 sub nextLine(){
+	die "Tried to access line $Lines_Next, $#Lines defined"	unless defined $Lines[$Lines_Next];
 	return $Lines[$Lines_Next++];
 }
 #Next multi-line value
@@ -155,7 +148,7 @@ sub initialize(){
 		$FileName_Decompiled	= $1 . '.src';
 		$FileName_XML			= $1 . '.xml';
 		$FileName_I7			= $1 . '.ni';
-		$FileName_Symbol_Gen	= $1 . '.sym'	if defined $Option_Generate;
+		$FileName_Symbol_Out	= $1 . '.sym'	if defined $Option_Generate;
 	}
 	else{
 	#Otherwise decide on input agnostic file names
@@ -164,11 +157,11 @@ sub initialize(){
 		$FileName_Decompiled	= 'story.src';
 		$FileName_XML			= 'story.xml';
 		$FileName_I7			= 'story.ni';
-		$FileName_Symbol_Gen	= 'story.sym'	if defined $Option_Generate;
+		$FileName_Symbol_Out	= 'story.sym'	if defined $Option_Generate;
 	}
 	openFiles();
 }
-sub parseArguments(){
+sub parseArguments(){	# Interpret command line arguments
 	while (defined $ARGV[0]) {
 		if	 ($ARGV[0] eq '-m') {	# Minimalist mode
 			$Option_Minimal	= 1;
@@ -183,7 +176,7 @@ sub parseArguments(){
 			splice(@ARGV, 0, 1);
 		}
 		elsif($ARGV[0] eq '-s') {	#Read symbol mapping file
-			$FileName_Symbol	= $ARGV[1];
+			$FileName_Symbol_In	= $ARGV[1];
 			splice(@ARGV, 0, 2);
 		}
 		elsif($ARGV[0] eq '+s') {	#Generate symbol mapping file template
@@ -201,8 +194,7 @@ sub parseArguments(){
 		else{ last }
 	}
 }
-#Open file handles
-sub openFiles(){
+sub openFiles(){		# Open file handles
 	#Determine filenames to use
 	#Create path as needed
 	mkdir $FileName_Path						unless -e $FileName_Path;
@@ -214,10 +206,14 @@ sub openFiles(){
 	die "$FileName_Compiled is not a valid file"	unless -f $FileName_Compiled;
 	open($File_Compiled, "< :raw :bytes", $FileName_Compiled)
 		or die("Couldn't open $FileName_Compiled for reading: $!");
-	#Open symbol mapping file if defined
-	open($File_Symbol, "< :raw :bytes", $FileName_Symbol)
-		|| die("Couldn't open $FileName_Symbol for reading.")
-		if defined $FileName_Symbol;
+	#Open symbol mapping input file if defined
+	open($File_Symbol_In, "< :raw :bytes", $FileName_Symbol_In)
+		or die("Couldn't open $FileName_Symbol_In for reading.")
+		if defined $FileName_Symbol_In;
+	#Open symbol mapping output file if defined
+	open($File_Symbol_Out, "> :raw :bytes", $FileName_Path . $FileName_Symbol_Out)
+		or die "$0: can't open $FileName_Path$FileName_Symbol_Out for writing: $!"
+		if defined $FileName_Symbol_Out;
 	#Open generated output files
 	open($File_Decompiled, "> :raw :bytes", $FileName_Path . $FileName_Decompiled)
 		or die "$0: can't open $FileName_Path$FileName_Decompiled for writing: $!";
@@ -227,22 +223,61 @@ sub openFiles(){
 		or die "$0: can't open $FileName_Path$FileName_XML for writing: $!";
 	#Open mapping file with some sanity checking
 	die "Overwriting existing symbol file with autogenerated is not supported in minimal mode"
-		if defined $FileName_Symbol_Gen && $Option_Minimal && -e $FileName_Symbol_Gen;
+		if defined $FileName_Symbol_In 
+				&& $Option_Minimal 
+				&& -e $FileName_Symbol_In;
 }
-#Determine compiler version by reading the story header
-sub determineVersion(){
+sub determineVersion(){	# Determine container version by reading the story header
+	#Load signature constants
+#	$Signature{Size}	= 14;
+#	$Signature{Extra}	= 8;
+	my $base	= chr(0x3c).chr(0x42).chr(0x3f).chr(0xc9).chr(0x6a).chr(0x87).chr(0xc2).chr(0xcf);
+	#Load known signatures
+	{	# v3.80
+		my $v380			= 0;
+		$Versions[$v380]	= '3.80';
+		$Signatures[$v380]	= $base.chr(0x94).chr(0x45).chr(0x36).chr(0x61).chr(0x39).chr(0xfa);
+	}
+	{	# v3.90
+		my $v390			= 1;
+		$Versions[$v390]	= '3.90';
+		$Signatures[$v390]	= $base.chr(0x94).chr(0x45).chr(0x37).chr(0x61).chr(0x39).chr(0xfa);
+	}
+	{	# v4.00
+		my $v400			= 2;
+		$Versions[$v400]	= '4.00';
+		$Signatures[$v400]	= $base.chr(0x93).chr(0x45).chr(0x3e).chr(0x61).chr(0x39).chr(0xfa);
+	}
+	{	# v5.00
+		my $v500			= 3;
+		$Versions[$v500]	= '5.00';
+		$Signatures[$v500]	= $base.chr(0x92).chr(0x45).chr(0x3e).chr(0x61).chr(0x30).chr(0x32);
+	}
+	#Read signature from file
 	my $signature_file;
-	my $bytes_read = read ($File_Compiled, $signature_file, $Signature{Size});
-	die 'Unable to read file signature'	unless $bytes_read eq $Signature{Size};
-	$Compiler_Version	= '4.00'		if $signature_file eq $Signature{V400};
-	$Compiler_Version	= '3.90'		if $signature_file eq $Signature{V390};
-	$Compiler_Version	= '3.80'		if $signature_file eq $Signature{V380};
-	die 'Unable to determine version'	unless defined $Compiler_Version;
-	$Terminator		= chr(189).chr(208)	if $Compiler_Version eq '4.00';
-	$Terminator		= chr( 42).chr( 42)	if $Compiler_Version eq '3.90' or $Compiler_Version eq '3.80';
+	my $bytes_read = read ($File_Compiled, $signature_file, 14);
+	die 'Unable to read file signature'	unless $bytes_read eq 14;
+	#Check file signature against known signatures
+	for my $v (0..$#Signatures) { $Container_Version	= $Versions[$v] if ($signature_file eq $Signatures[$v]) }
+	unless (defined $Container_Version){
+		my $mask			= '';
+		for (1 .. length($signature_file)) { $mask .= chr(nextRandom()) }
+		#Decrypt; don't bother reseting PRNG
+		my $decrypted	= $signature_file ^ $mask;
+		#Print and die
+		print $File_Log "Unknown or unhandled version: $decrypted:\n";
+		debugDump($signature_file);
+		die 'Unable to determine version';
+	}
+	#Set some version dependant constants
+	$Terminator		= chr(189).chr(208)	if $Container_Version eq '4.00' or $Container_Version eq '5.00';
+	$Terminator		= chr( 42).chr( 42)	if $Container_Version eq '3.90' or $Container_Version eq '3.80';
 }
-#Initialize constants that might depend on version
-sub loadConstants(){
+sub loadConstants(){	# Initialize constants that might depend on version
+	#Null-values
+	$Symbol_Room[0]		= 'nowhere';
+	$Symbol_Object[0]	= 'nothing';
+	$Symbol_Person[0]	= 'player';
 	{	#Compass directions; dependant on the ExpandedCompass global
 		$Symbol_Compass_Direction[0]	= 'North';
 		$Symbol_Compass_Direction[1]	= 'East';
@@ -276,15 +311,15 @@ sub loadConstants(){
 		$Symbol_Gender[1]	= 'woman';
 	}
 }
-#Load symbol mapping translation from given file
-sub loadSymbols(){
-	return unless defined $FileName_Symbol;
-	while (my $line = <$File_Symbol>) {
+sub loadSymbols(){		# Read symbol mapping translation from given file
+	return unless defined $FileName_Symbol_In;
+	while (my $line = <$File_Symbol_In>) {
 		#Pre-process the line
 		chomp $line;
 		$line	= (split('#', $line))[0];		# Remove comments
 		#Skip ahead if the line doesn't contain anything
-		next if($line =~ m/\^s*$/i );
+#		next unless length $line;
+		next if($line =~ m/^\s*$/i );
 		my $parsed;
 #TODO: This could be improved
 		if ($line =~ m/(Room)s?\[?(\d*)\]?\s*=\s*['"](.*)['"]/i ) {
@@ -315,41 +350,61 @@ sub loadSymbols(){
 			$parsed 			= $3;
 			$Symbol_Variable[$2]	= $parsed;
 		}
-		print "Unable to parse $line\n" unless defined $parsed;
+		print "Unable to parse $line (".length($line).")\n" unless defined $parsed;
 	}
 }
 sub loadFile(){
 	#Read in the raw file
-	my $raw			= read_file ( $FileName_Compiled, binmode => ':raw' );
-	#V4 is stored as a deflated zlib
-	if ($Compiler_Version	eq '4.00'){
-		#Skip file signature
-		$raw				= substr($raw, $Signature{Size} + $Signature{Extra});
-		#Initiate inflation stream
-		my $stream 			= inflateInit() or die 'Cannot create inflation stream';
-		#Inflate and store in Contents_Compiled
-		($Contents_Compiled, my $status)	= $stream->inflate($raw);
-	}
+	my $buffer			= read_file ( $FileName_Compiled, binmode => ':raw' );
 	#V3 is stored as encrypted text
-	if ($Compiler_Version	eq '3.90' or $Compiler_Version	eq '3.80'){
+	if ($Container_Version	eq '3.90' or $Container_Version	eq '3.80'){
 		#Generate decryption mask
-		my $size			= length($raw);
+		my $size			= length($buffer);
 		my $mask			= '';
 		for (1 .. $size) { $mask .= chr(nextRandom()) }
 		#Decrypt
-		$Contents_Compiled	= $raw ^ $mask;
+		$Contents_Compiled	= $buffer ^ $mask;
 	}
+	#V4 is stored as a deflated zlib after an extended header
+	if ($Container_Version	eq '4.00' or $Container_Version	eq '5.00'){
+		#Skip file signature and header
+		$buffer				= substr($buffer, 14+8);
+		#Initiate inflation stream
+		my $stream 			= inflateInit() or die 'Cannot create inflation stream';
+		#Inflate and store in Contents_Compiled
+		my $status;
+		($Contents_Compiled, $status)	= $stream->inflate($buffer);
+		#TODO: Check status
+	}
+	#V5 is stored as a deflated zlib
+	if ($Container_Version	eq '5.00'){
+		#Skip file signature and header
+		my $skip			= index($buffer, '</ifindex>')+10	if $Container_Version eq '5.00';
+		print $skip;
+		debugDump(substr($buffer, $skip, 30));
+		$buffer				= substr($buffer, $skip);
+		die "v5.00 containeris not yet supported";
+		#Initiate inflation stream
+		my $stream 			= inflateInit() or die 'Cannot create inflation stream';
+		#Inflate and store in Contents_Compiled
+		my $status;
+		($Contents_Compiled, $status)	= $stream->inflate($buffer);
+		#TODO: Check status
+	}
+	#Sanity check
+	die "V$Container_Version not supported, unable to load file"	unless defined $Contents_Compiled;
 	#Dump raw file if called for
 	print $File_Decompiled $Contents_Compiled if defined $Option_Rawdump;
 	#Split and store lines
-	@Lines = split(chr(13).chr(10), $Contents_Compiled);
+	$Lines_Next	= 0;
+	@Lines		= split(chr(13).chr(10), $Contents_Compiled);
 	print $File_Log "Decompiler v$Decompiler_Version on $FileName_Compiled";
 }
-##Parsing each content type
+##Parsing file into memory structure
 sub parse(){
 	#Parse header, printing the most important settings
 	parseHeader();
-	print $File_Log " $Story{Title} by $Story{Author} (ADRIFT v$Compiler_Version)\n";
+	print $File_Log " $Story{Title} by $Story{Author} (ADRIFT v$Container_Version)\n";
 	print $File_Log "\tBattles\n"			if $Story{EnableBattle};
 	print $File_Log "\t8-point compass\n"	if $Story{ExpandedCompass};
 	print $File_Log "\tGraphics\n"			if $Story{EnableGraphics};
@@ -361,41 +416,41 @@ sub parse(){
 	#Parse rooms
 	my $rooms		= nextLine();
 	print $File_Log "$rooms rooms\n";
-	for my $room	(1 .. $rooms) { push @Rooms, parseRoom($room); }
+	for (1 .. $rooms)		{ push @Rooms, parseRoom() }
 	#Parse objects
 	my $objects		= nextLine();
 	print $File_Log "$objects objects\n";
-	for my $object	(1 .. $objects) { push @Objects, parseObject($object); }
+	for (1 .. $objects) 	{ push @Objects, parseObject() }
 	#Parse tasks
 	my $tasks		= nextLine();
 	print $File_Log "$tasks tasks\n";
-	for my $task	(1 .. $tasks) { push @Tasks, parseTask($task); }
+	for (1 .. $tasks)		{ push @Tasks, parseTask() }
 	#Parse timed events
 	my $events		= nextLine();
 	print $File_Log "$events events\n";
-	for my $event	(1 .. $events) { push @Events, parseEvent($event); }
+	for (1 .. $events)		{ push @Events, parseEvent() }
 	#Parse persons
 	my $persons		= nextLine();
 	print $File_Log "$persons persons\n";
-	for my $person	(1 .. $persons) { push @Persons, parsePerson($person); }
+	for (1 .. $persons)		{ push @Persons, parsePerson(); }
 	#Parse room-groups
 	my $groups		= nextLine();
 	print $File_Log "$groups groups\n";
-	for my $group	(1 .. $groups) { push @Groups, parseGroup($group); }
+	for (1 .. $groups)		{ push @Groups, parseGroup(); }
 	#Parse parser-synonyms
 	my $synonyms	= nextLine();
 	print $File_Log "$synonyms synonyms\n";
-	for my $synonym	(1 .. $synonyms) { push @Synonyms, parseSynonym($synonym); }
+	for (1 .. $synonyms)	{ push @Synonyms, parseSynonym(); }
 	#Parse variables
 	my $variables	= 0;
-	$variables		= nextLine()	if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
+	$variables		= nextLine()	if $Container_Version eq '3.90' or $Container_Version eq '4.00';
 	print $File_Log "$variables variables\n";
-	for my $variable	(1 .. $variables) { push @Variables, parseVariable($variable); }
+	for (1 .. $variables)	{ push @Variables, parseVariable(); }
 	#Parse alternate-language resources
 	my $alrs		= 0;
-	$alrs			= nextLine() if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
+	$alrs			= nextLine() if $Container_Version eq '3.90' or $Container_Version eq '4.00';
 	print $File_Log "$alrs ALRs\n";
-	for my $alr	(1 .. $alrs) { push @ALRs, parseALR($alr); }
+	for (1 .. $alrs)		{ push @ALRs, parseALR(); }
 	#Parse footer
 	parseFooter();
 	print $File_Log "Parsed  $Lines_Next of ". ($#Lines + 1) ." lines\n";
@@ -410,7 +465,7 @@ sub parseHeader(){
 	#text	GameAuthor
 	$Story{Author}			= nextLine();
 	#number	MaxCarried		TODO postprocessing into MaxSize and MaxWeight
-	my $max_carried			= nextLine()		if $Compiler_Version eq '3.80';
+	my $max_carried			= nextLine()		if $Container_Version eq '3.80';
 	#text	DontUnderstand
 	$Story{Error}			= nextLine();
 	#number	Perspective
@@ -420,107 +475,117 @@ sub parseHeader(){
 	#number	WaitTurns
 	$Story{WaitTurns}		= nextLine();
 	#truth	DispFirstRoom
-	$Story{InitialLook}		= 0					if $Compiler_Version eq '3.80';
-	$Story{InitialLook}		= nextLine()		if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
+	$Story{InitialLook}		= 0					if $Container_Version eq '3.80';
+	$Story{InitialLook}		= nextLine()		if $Container_Version eq '3.90' or $Container_Version eq '4.00';
 	#truth	BattleSystem
-	$Story{EnableBattle}	= 0					if $Compiler_Version eq '3.80';
-	$Story{EnableBattle}	= nextLine()		if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
+	$Story{EnableBattle}	= 0					if $Container_Version eq '3.80';
+	$Story{EnableBattle}	= nextLine()		if $Container_Version eq '3.90' or $Container_Version eq '4.00';
 	#number	MaxScore
-	$Story{MaxScore}		= 0					if $Compiler_Version eq '3.80';
-	$Story{MaxScore}		= nextLine()		if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
+	$Story{MaxScore}		= 0					if $Container_Version eq '3.80';
+	$Story{MaxScore}		= nextLine()		if $Container_Version eq '3.90' or $Container_Version eq '4.00';
 	#text	PlayerName
-	$Story{PlayerName}		= ''				if $Compiler_Version eq '3.80';
-	$Story{PlayerName}		= nextLine()		if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
+	$Story{PlayerName}		= ''				if $Container_Version eq '3.80';
+	$Story{PlayerName}		= nextLine()		if $Container_Version eq '3.90' or $Container_Version eq '4.00';
 	#truth	PromptName
-	$Story{PromptName}		= 0					if $Compiler_Version eq '3.80';
-	$Story{PromptName}		= nextLine()		if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
+	$Story{PromptName}		= 0					if $Container_Version eq '3.80';
+	$Story{PromptName}		= nextLine()		if $Container_Version eq '3.90' or $Container_Version eq '4.00';
 	#text	PlayerDesc
-	$Story{PlayerDesc}		= ''				if $Compiler_Version eq '3.80';
-	$Story{PlayerDesc}		= nextLine()		if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
+	$Story{PlayerDesc}		= ''				if $Container_Version eq '3.80';
+	$Story{PlayerDesc}		= nextLine()		if $Container_Version eq '3.90' or $Container_Version eq '4.00';
 	#number	Task
-	$Story{AltDescTask}		= 0					if $Compiler_Version eq '3.80';
-	$Story{AltDescTask}		= nextLine()		if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
+	$Story{AltDescTask}		= 0					if $Container_Version eq '3.80';
+	$Story{AltDescTask}		= nextLine()		if $Container_Version eq '3.90' or $Container_Version eq '4.00';
 	#text	AltDesc
 	$Story{AltDesc}			= nextLine()		if $Story{AltDescTask};
 	#number	Position
-	$Story{Position}		= 0					if $Compiler_Version eq '3.80';
-	$Story{Position}		= nextLine()		if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
+	$Story{Position}		= 0					if $Container_Version eq '3.80';
+	$Story{Position}		= nextLine()		if $Container_Version eq '3.90' or $Container_Version eq '4.00';
 	#number	ParentObject
-	$Story{ParentObject}	= 0					if $Compiler_Version eq '3.80';
-	$Story{ParentObject}	= nextLine()		if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
+	$Story{ParentObject}	= 0					if $Container_Version eq '3.80';
+	$Story{ParentObject}	= nextLine()		if $Container_Version eq '3.90' or $Container_Version eq '4.00';
 	#number	PlayerGender
-	$Story{PlayerGender}	= 0					if $Compiler_Version eq '3.80';
-	$Story{PlayerGender}	= nextLine()		if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
+	$Story{PlayerGender}	= 0					if $Container_Version eq '3.80';
+	$Story{PlayerGender}	= nextLine()		if $Container_Version eq '3.90' or $Container_Version eq '4.00';
 	#number	MaxSize
-	$Story{MaxSize}			= 0					if $Compiler_Version eq '3.80';	#TODO Process $max_carried into this
-	$Story{MaxSize}			= nextLine()		if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
+	$Story{MaxSize}			= 0					if $Container_Version eq '3.80';	#TODO Process $max_carried into this
+	$Story{MaxSize}			= nextLine()		if $Container_Version eq '3.90' or $Container_Version eq '4.00';
 	#number	MaxWeight
-	$Story{MaxWeight}		= 0					if $Compiler_Version eq '3.80';	#TODO Process $max_carried into this
-	$Story{MaxWeight}		= nextLine()		if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
+	$Story{MaxWeight}		= 0					if $Container_Version eq '3.80';	#TODO Process $max_carried into this
+	$Story{MaxWeight}		= nextLine()		if $Container_Version eq '3.90' or $Container_Version eq '4.00';
 	#battle	PlayerStats
 	$Story{PlayerStats}		= parseBattle()		if $Story{EnableBattle};
 	#truth	EightPointCompass
-	$Story{ExpandedCompass}	= 0					if $Compiler_Version eq '3.80';
-	$Story{ExpandedCompass}	= nextLine()		if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
+	$Story{ExpandedCompass}	= 0					if $Container_Version eq '3.80';
+	$Story{ExpandedCompass}	= nextLine()		if $Container_Version eq '3.90' or $Container_Version eq '4.00';
 	#truth	NoDebug			SKIP
-	nextLine()									if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
+	nextLine()									if $Container_Version eq '3.90' or $Container_Version eq '4.00';
 	#truth	NoScoreNotify
-	$Story{NoScoreNotify}	= 1					if $Compiler_Version eq '3.80';
-	$Story{NoScoreNotify}	= nextLine()		if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
+	$Story{NoScoreNotify}	= 1					if $Container_Version eq '3.80';
+	$Story{NoScoreNotify}	= nextLine()		if $Container_Version eq '3.90' or $Container_Version eq '4.00';
 	#truth	DisableMap
-	$Story{DisableMap}		= 0					if $Compiler_Version eq '3.80';
-	$Story{DisableMap}		= nextLine()		if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
+	$Story{DisableMap}		= 0					if $Container_Version eq '3.80';
+	$Story{DisableMap}		= nextLine()		if $Container_Version eq '3.90' or $Container_Version eq '4.00';
 	#truth	NoAutoComplete	SKIP
-	nextLine()									if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
+	nextLine()									if $Container_Version eq '3.90' or $Container_Version eq '4.00';
 	#truth	NoControlPanel	SKIP
-	nextLine()									if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
+	nextLine()									if $Container_Version eq '3.90' or $Container_Version eq '4.00';
 	#truth	NoMouse			SKIP
-	nextLine()									if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
+	nextLine()									if $Container_Version eq '3.90' or $Container_Version eq '4.00';
 	#truth	Sound
-	$Story{EnableSound}		= 0					if $Compiler_Version eq '3.80';
-	$Story{EnableSound}		= nextLine()		if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
+	$Story{EnableSound}		= 0					if $Container_Version eq '3.80';
+	$Story{EnableSound}		= nextLine()		if $Container_Version eq '3.90' or $Container_Version eq '4.00';
 	#truth	Graphics
-	$Story{EnableGraphics}	= 0					if $Compiler_Version eq '3.80';
-	$Story{EnableGraphics}	= nextLine()		if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
+	$Story{EnableGraphics}	= 0					if $Container_Version eq '3.80';
+	$Story{EnableGraphics}	= nextLine()		if $Container_Version eq '3.90' or $Container_Version eq '4.00';
 	#resource	IntroRes
-	$Story{IntroRes}		= parseResource()	if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
+	$Story{IntroRes}		= parseResource()	if $Container_Version eq '3.90' or $Container_Version eq '4.00';
 	#resource	WinRes
-	$Story{WinRes}			= parseResource()	if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
+	$Story{WinRes}			= parseResource()	if $Container_Version eq '3.90' or $Container_Version eq '4.00';
 	#truth	StatusBox
-	$Story{EnableStatusBox}	= 0					if $Compiler_Version eq '3.80' or $Compiler_Version eq '3.90';
-	$Story{EnableStatusBox}	= nextLine()		if $Compiler_Version eq '4.00';
+	$Story{EnableStatusBox}	= 0					if $Container_Version eq '3.80' or $Container_Version eq '3.90';
+	$Story{EnableStatusBox}	= nextLine()		if $Container_Version eq '4.00';
 	#text	StatusBoxText
-	$Story{StatusBoxText}	= ''				if $Compiler_Version eq '3.80' or $Compiler_Version eq '3.90';
-	$Story{StatusBoxText}	= nextLine()		if $Compiler_Version eq '4.00';
+	$Story{StatusBoxText}	= ''				if $Container_Version eq '3.80' or $Container_Version eq '3.90';
+	$Story{StatusBoxText}	= nextLine()		if $Container_Version eq '4.00';
 	#2x	Unknown				SKIP
-	nextLine()									if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
-	nextLine()									if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
+	nextLine()									if $Container_Version eq '3.90' or $Container_Version eq '4.00';
+	nextLine()									if $Container_Version eq '3.90' or $Container_Version eq '4.00';
 	#truth	Embedded
-	$Story{Embedded}		= 0					if $Compiler_Version eq '3.80' or $Compiler_Version eq '3.90';
-	$Story{Embedded}		= nextLine()		if $Compiler_Version eq '4.00';
+	$Story{Embedded}		= 0					if $Container_Version eq '3.80' or $Container_Version eq '3.90';
+	$Story{Embedded}		= nextLine()		if $Container_Version eq '4.00';
 }
 sub parseFooter(){
 	#truth	CustomFont
-	$Story{CustomFont}		= 0					if $Compiler_Version eq '3.80';
-	$Story{CustomFont}		= nextLine()		if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
+	$Story{CustomFont}		= 0					if $Container_Version eq '3.80';
+	$Story{CustomFont}		= nextLine()		if $Container_Version eq '3.90' or $Container_Version eq '4.00';
 	#text	FontNameSize
 	$Story{FontNameSize}	= nextLine()		if $Story{CustomFont};
 	#text	CompileDate
 	$Story{CompileDate}		= nextLine();
 	#text	Password		SKIP
-	nextLine()	if $Compiler_Version eq '3.80' or $Compiler_Version eq '3.90';
+	nextLine()	if $Container_Version eq '3.80' or $Container_Version eq '3.90';
 }
 #Routines for parsing major objects
-sub parseRoom($){
-	my $id		= shift;
+sub parseRoom(){
+	my $id		= @Rooms;
 	my %room	= ();
+	#References
+	$room{RoomReferences}		= [];
+	$room{ObjectReferences}		= [];
+	$room{TaskReferences}		= [];
+	$room{EventReferences}		= [];
+	$room{PersonReferences}		= [];
+	$room{GroupReferences}		= [];
+	$room{SynonymReferences}	= [];
+	$room{VariableReferences}	= [];
+	$room{ALRReferences}		= [];
 	#text	Short
-	$room{Title}			= nextLine();
-	print $File_Log "\t\t$id: $room{Title}\n"	if defined $Option_Verbose;
+	$room{Short}			= nextLine();
+	print $File_Log "\t\t$id: $room{Short}\n"	if defined $Option_Verbose;
 	#text	Long
 	$room{Description}		= nextLine();
 	#text	LastDesc
-	$room{LastDesc}			= nextLine()		if $Compiler_Version eq '3.80' or $Compiler_Version eq '3.90';
+	$room{LastDesc}			= nextLine()		if $Container_Version eq '3.80' or $Container_Version eq '3.90';
 	#exit	RoomExits
 	my $exit_count			= 0;
 	$room{Exits}			= [];
@@ -530,43 +595,53 @@ sub parseRoom($){
 	}
 	print $File_Log "\t\t\t$exit_count exit(s)\n"	if defined $Option_Verbose;
 	#text	AddDesc1
-	$room{AltDesc1}			= nextLine()		if $Compiler_Version eq '3.80' or $Compiler_Version eq '3.90';
+	$room{AltDesc1}			= nextLine()		if $Container_Version eq '3.80' or $Container_Version eq '3.90';
 	#number	AddDesc1Task
-	$room{AltDesc1Task}		= nextLine()		if $Compiler_Version eq '3.80' or $Compiler_Version eq '3.90';
+	$room{AltDesc1Task}		= nextLine()		if $Container_Version eq '3.80' or $Container_Version eq '3.90';
 	#text	AddDesc2
-	$room{AltDesc2}			= nextLine()		if $Compiler_Version eq '3.80' or $Compiler_Version eq '3.90';
+	$room{AltDesc2}			= nextLine()		if $Container_Version eq '3.80' or $Container_Version eq '3.90';
 	#number	AddDesc2Task
-	$room{AltDesc2Task}		= nextLine()		if $Compiler_Version eq '3.80' or $Compiler_Version eq '3.90';
+	$room{AltDesc2Task}		= nextLine()		if $Container_Version eq '3.80' or $Container_Version eq '3.90';
 	#number	Obj
-	$room{AltDesc3Obj}		= nextLine()		if $Compiler_Version eq '3.80' or $Compiler_Version eq '3.90';
+	$room{AltDesc3Obj}		= nextLine()		if $Container_Version eq '3.80' or $Container_Version eq '3.90';
 	#text	AltDesc
-	$room{AltDesc3}			= nextLine()		if $Compiler_Version eq '3.80' or $Compiler_Version eq '3.90';
+	$room{AltDesc3}			= nextLine()		if $Container_Version eq '3.80' or $Container_Version eq '3.90';
 	#number	TypeHideObjects
-	$room{TypeHideObjects}	= nextLine()		if $Compiler_Version eq '3.80' or $Compiler_Version eq '3.90';
+	$room{TypeHideObjects}	= nextLine()		if $Container_Version eq '3.80' or $Container_Version eq '3.90';
 	#resource	Res
-	$room{Resource}			= parseResource()	if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
+	$room{Resource}			= parseResource()	if $Container_Version eq '3.90' or $Container_Version eq '4.00';
 	#resource	LastRes
-	$room{LastDescResource}	= parseResource()	if $Compiler_Version eq '3.90';
+	$room{LastDescResource}	= parseResource()	if $Container_Version eq '3.90';
 	#resource	Task1Res
-	$room{AltDesc1Resource}	= parseResource()	if $Compiler_Version eq '3.90';
+	$room{AltDesc1Resource}	= parseResource()	if $Container_Version eq '3.90';
 	#resource	Task2Res
-	$room{AltDesc2Resource}	= parseResource()	if $Compiler_Version eq '3.90';
+	$room{AltDesc2Resource}	= parseResource()	if $Container_Version eq '3.90';
 	#resource	AltRes
-	$room{AltDesc3Resource}	= parseResource()	if $Compiler_Version eq '3.90';
+	$room{AltDesc3Resource}	= parseResource()	if $Container_Version eq '3.90';
 	#RoomAlt	Alternates
 	my $alternate_count	= 0;
 	my @alternates		= ();
-	$alternate_count		= nextLine()		if $Compiler_Version eq '4.00';
+	$alternate_count		= nextLine()		if $Container_Version eq '4.00';
 	for (1 .. $alternate_count){ push @alternates, parseRoomAlt() }
 	$room{Alternates}		= \@alternates;
 	print $File_Log "\t\t\t$alternate_count alternate(s)\n"	if defined $Option_Verbose && $alternate_count;
 	#truth	HideOnMap
-	$room{Hidden}			= nextLine()		if ($Compiler_Version eq '3.90' or $Compiler_Version eq '4.00') && not $Story{DisableMap};
+	$room{Hidden}			= nextLine()		if ($Container_Version eq '3.90' or $Container_Version eq '4.00') && not $Story{DisableMap};
 	return \%room;
 }
-sub parseObject($){
-	my $id		= shift;
+sub parseObject(){
+	my $id	= @Objects;
 	my %object	= ();
+	#References
+	$object{RoomReferences}		= [];
+	$object{ObjectReferences}	= [];
+	$object{TaskReferences}		= [];
+	$object{EventReferences}	= [];
+	$object{PersonReferences}	= [];
+	$object{GroupReferences}	= [];
+	$object{SynonymReferences}	= [];
+	$object{VariableReferences}	= [];
+	$object{ALRReferences}		= [];
 	#text	Prefix
 	$object{Prefix}			= nextLine();
 	#text	Short
@@ -574,7 +649,7 @@ sub parseObject($){
 	print $File_Log "\t\t$id: ($object{Prefix}) $object{Short}\n"	if defined $Option_Verbose;
 	#text	Alias
 	my $alias				= 1;
-	$alias					= nextLine()		if $Compiler_Version eq '4.00';
+	$alias					= nextLine()		if $Container_Version eq '4.00';
 	$object{Alias}			= ();
 	for (1 .. $alias) { push @{ $object{Alias} }, nextLine(); }
 	#truth	Static
@@ -604,18 +679,18 @@ sub parseObject($){
 		for my $room (0 .. $#Rooms){ push @{ $object{Where} }, $room if nextLine(); }
 	}
 	my $surfaceContainer	= 0;
-	$surfaceContainer		= nextLine()		if $Compiler_Version eq '3.80';
+	$surfaceContainer		= nextLine()		if $Container_Version eq '3.80';
 	#truth	Container
 	$object{Container}		= 0					unless $surfaceContainer eq 1;
 	$object{Container}		= 1					if $surfaceContainer eq 1;
-	$object{Container}		= nextLine()		if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
+	$object{Container}		= nextLine()		if $Container_Version eq '3.90' or $Container_Version eq '4.00';
 	#truth	Surface
 	$object{Surface}		= 0					unless $surfaceContainer eq 2;
 	$object{Surface}		= 1					if $surfaceContainer eq 2;
-	$object{Surface}		= nextLine()		if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
+	$object{Surface}		= nextLine()		if $Container_Version eq '3.90' or $Container_Version eq '4.00';
 	#number	Capacity
 	$object{Capacity}		= nextLine();
-	$object{Capacity}		= $object{Capacity} * 10 + 2	if $Compiler_Version eq '3.80';
+	$object{Capacity}		= $object{Capacity} * 10 + 2	if $Container_Version eq '3.80';
 	#truth	Wearable
 	$object{Wearable}		= 0;
 	$object{Wearable}		= nextLine()		unless $object{Static};
@@ -634,12 +709,12 @@ sub parseObject($){
 #	7: LOCKED
 	$object{Openable}		= $openable;
 	#Code 5 and 6 are reversed in v3.XX
-	if($Compiler_Version eq '3.80' or $Compiler_Version eq '3.90'){
+	if($Container_Version eq '3.80' or $Container_Version eq '3.90'){
 		$object{Openable}		= 6 if $openable eq 5;
 		$object{Openable}		= 5 if $openable eq 6;
 	}
 	#number	Key
-	$object{Key}			= nextLine()		if $Compiler_Version eq '4.00' && $object{Openable};
+	$object{Key}			= nextLine()		if $Container_Version eq '4.00' && $object{Openable};
 	#number	SitLie
 	my $enterableType		= nextLine();
 	$object{EnterableType}	= $enterableType;
@@ -654,8 +729,8 @@ sub parseObject($){
 	#truth	Weapon
 	$object{Weapon}			= nextLine()		unless $object{Static};
 	#number	CurrentState
-	$object{CurrentState}	= 0					if $Compiler_Version eq '3.80' or $Compiler_Version eq '3.90';
-	$object{CurrentState}	= nextLine()		if $Compiler_Version eq '4.00';
+	$object{CurrentState}	= 0					if $Container_Version eq '3.80' or $Container_Version eq '3.90';
+	$object{CurrentState}	= nextLine()		if $Container_Version eq '4.00';
 	#number	States
 	$object{States}			= 0;
 	$object{States}			= nextLine()		if $object{CurrentState};
@@ -663,37 +738,48 @@ sub parseObject($){
 	$object{StateListed}	= 0;
 	$object{StateListed}	= nextLine()		if $object{CurrentState};
 	#truth	ListFlag
-	$object{ListFlag}		= 0					if $Compiler_Version eq '3.80' or $Compiler_Version eq '3.90';
-	$object{ListFlag}		= nextLine()		if $Compiler_Version eq '4.00';
+	$object{ListFlag}		= 0					if $Container_Version eq '3.80' or $Container_Version eq '3.90';
+	$object{ListFlag}		= nextLine()		if $Container_Version eq '4.00';
 	#resource	Res1
-	$object{Resource1}		= parseResource()	if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
+	$object{Resource1}		= parseResource()	if $Container_Version eq '3.90' or $Container_Version eq '4.00';
 	#resource	Res2
-	$object{Resource2}		= parseResource()	if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
+	$object{Resource2}		= parseResource()	if $Container_Version eq '3.90' or $Container_Version eq '4.00';
 	#battle	Battle
 	$object{BattleStats}	= parseBattle()		if $Story{EnableBattle};
 	#text	InRoomDesc
-	$object{InRoomDesc}		= ''				if $Compiler_Version eq '3.80' or $Compiler_Version eq '3.90';
-	$object{InRoomDesc}		= nextLine()		if $Compiler_Version eq '4.00';
+	$object{InRoomDesc}		= ''				if $Container_Version eq '3.80' or $Container_Version eq '3.90';
+	$object{InRoomDesc}		= nextLine()		if $Container_Version eq '4.00';
 	#number	OnlyWhenNotMoved
-	$object{InRoomDescType}	= 0					if $Compiler_Version eq '3.80' or $Compiler_Version eq '3.90';
-	$object{InRoomDescType}	= nextLine()		if $Compiler_Version eq '4.00';
+	$object{InRoomDescType}	= 0					if $Container_Version eq '3.80' or $Container_Version eq '3.90';
+	$object{InRoomDescType}	= nextLine()		if $Container_Version eq '4.00';
 	#Update the Object mapping references:
 	push @ObjectPortable, $id		unless $object{Static};
 	push @ObjectStatic,	$id			if $object{Static};
 	push @ObjectOpenable, $id		if $object{Openable};
+	push @ObjectStateful, $id		if $object{Openable} or $object{CurrentState};
 	push @ObjectContainer, $id		if $object{Container};
 	push @ObjectSurface, $id		if $object{Surface};
-	push @ObjectHolder,	$id			if $object{Container} || $object{Surface};
+	push @ObjectHolder,	$id			if $object{Container} or $object{Surface};
 	push @ObjectLieable, $id		if $object{Lieable};
 	push @ObjectSitStandable, $id	if $object{SitStandable};
 	return \%object;
 }
-sub parseTask($){
-	my $id		= shift;
+sub parseTask(){
+	my $id		= @Tasks;
 	my %task	= ();
+	#References
+	$task{RoomReferences}		= [];
+	$task{ObjectReferences}		= [];
+	$task{TaskReferences}		= [];
+	$task{EventReferences}		= [];
+	$task{PersonReferences}		= [];
+	$task{GroupReferences}		= [];
+	$task{SynonymReferences}	= [];
+	$task{VariableReferences}	= [];
+	$task{ALRReferences}		= [];
 	#text	Command
 	my $commands			= nextLine();
-	$commands++				if $Compiler_Version eq '3.80' or $Compiler_Version eq '3.90';
+	$commands++				if $Container_Version eq '3.80' or $Container_Version eq '3.90';
 	$task{Commands}			= ();
 	for (1 .. $commands) { push @{ $task{Commands} }, nextLine(); }
 	print $File_Log "\t\t$id: $task{Commands}[0] ($commands)\n"	if defined $Option_Verbose;
@@ -708,7 +794,7 @@ sub parseTask($){
 	#number	ShowRoomDesc
 	$task{ShowRoomDesc}			= nextLine();
 	#Some 3.80 variables
-	if ($Compiler_Version eq '3.80'){
+	if ($Container_Version eq '3.80'){
 		#number	Score
 		$task{Score}			= nextLine();
 		#number	SingleScore
@@ -729,12 +815,12 @@ sub parseTask($){
 	$task{Reversible}			= nextLine();
 	#text	ReverseCommand
 	my $commands_reverse		= nextLine();
-	$commands_reverse++			if $Compiler_Version eq '3.80' or $Compiler_Version eq '3.90';
+	$commands_reverse++			if $Container_Version eq '3.80' or $Container_Version eq '3.90';
 	print $File_Log "\t\t\t$commands_reverse reversion(s)\n"	if defined $Option_Verbose;
 	$task{CommandsReverse}		= [];
 	for (1 .. $commands_reverse) { push @{ $task{CommandsReverse} }, nextLine(); }
 	#Some 3.80 variables
-	if ($Compiler_Version eq '3.80'){
+	if ($Container_Version eq '3.80'){
 		#number	WearObj1
 		$task{WearObj1}			= nextLine();
 		#number	WearObj2
@@ -783,7 +869,7 @@ sub parseTask($){
 		for my $room (1 .. $#Rooms){ push @{ $task{Where} }, $room if nextLine(); }
 	}
 	#Some 3.80 variables
-	if ($Compiler_Version eq '3.80'){
+	if ($Container_Version eq '3.80'){
 		#truth	KillsPlayer
 		$task{KillsPlayer}		= nextLine();
 		#truth	HoldingSameRoom
@@ -797,7 +883,7 @@ sub parseTask($){
 	#text	Hint2
 	$task{Hint2}				= nextLine()		if length $task{Question};
 	#Some 3.80 variables
-	if ($Compiler_Version eq '3.80'){
+	if ($Container_Version eq '3.80'){
 		#number	Obj2
 		$task{Obj2}				= nextLine();
 		#number	Obj2Var1
@@ -812,24 +898,34 @@ sub parseTask($){
 	#Restrictions	Restrictions
 	$task{Restrictions}			= [];
 	my $restrictions			= 0;
-	$restrictions				= nextLine()		if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
+	$restrictions				= nextLine()		if $Container_Version eq '3.90' or $Container_Version eq '4.00';
 	print $File_Log "\t\t\t$restrictions restriction(s)\n"	if defined $Option_Verbose;
 	for (1 .. $restrictions) { push @{ $task{Restrictions} }, parseRestriction(); }
 	#Actions	Actions
 	$task{Actions}				= [];
 	my $actions					= 0;
-	$actions					= nextLine()		if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
+	$actions					= nextLine()		if $Container_Version eq '3.90' or $Container_Version eq '4.00';
 	print $File_Log "\t\t\t$actions action(s)\n"	if defined $Option_Verbose;
 	for (1 .. $actions) { push @{ $task{Actions} }, parseAction(); }
 	#text	RestrMask
-	$task{RestrMask}			= nextLine()		if $Compiler_Version eq '4.00';
+	$task{RestrMask}			= nextLine()		if $Container_Version eq '4.00';
 	#resource Res
-	$task{Resource}				= parseResource()	if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
+	$task{Resource}				= parseResource()	if $Container_Version eq '3.90' or $Container_Version eq '4.00';
 	return \%task;
 }
-sub parseEvent($){
-	my $id		= shift;
+sub parseEvent(){
+	my $id		= @Events;
 	my %event	= ();
+	#References
+	$event{RoomReferences}		= [];
+	$event{ObjectReferences}	= [];
+	$event{TaskReferences}		= [];
+	$event{EventReferences}		= [];
+	$event{PersonReferences}	= [];
+	$event{GroupReferences}		= [];
+	$event{SynonymReferences}	= [];
+	$event{VariableReferences}	= [];
+	$event{ALRReferences}		= [];
 	#text	Short
 	$event{Short}			= nextLine();
 	print $File_Log "\t\t$id: $event{Short}\n"	if defined $Option_Verbose;
@@ -900,16 +996,26 @@ sub parseEvent($){
 	#number	TaskAffected
 	$event{TaskAffected}	= nextLine();
 	#Resources
-	$event{Res1}			= parseResource()		if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
-	$event{Res2}			= parseResource()		if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
-	$event{Res3}			= parseResource()		if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
-	$event{Res4}			= parseResource()		if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
-	$event{Res5}			= parseResource()		if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
+	$event{Res1}			= parseResource()		if $Container_Version eq '3.90' or $Container_Version eq '4.00';
+	$event{Res2}			= parseResource()		if $Container_Version eq '3.90' or $Container_Version eq '4.00';
+	$event{Res3}			= parseResource()		if $Container_Version eq '3.90' or $Container_Version eq '4.00';
+	$event{Res4}			= parseResource()		if $Container_Version eq '3.90' or $Container_Version eq '4.00';
+	$event{Res5}			= parseResource()		if $Container_Version eq '3.90' or $Container_Version eq '4.00';
 	return \%event;
 }
-sub parsePerson($){
-	my $id		= shift;
+sub parsePerson(){
+	my $id		= @Persons;
 	my %person	= ();
+	#References
+	$person{RoomReferences}		= [];
+	$person{ObjectReferences}	= [];
+	$person{TaskReferences}		= [];
+	$person{EventReferences}	= [];
+	$person{PersonReferences}	= [];
+	$person{GroupReferences}	= [];
+	$person{SynonymReferences}	= [];
+	$person{VariableReferences}	= [];
+	$person{ALRReferences}		= [];
 	#text	Name
 	$person{Name}			= nextLine();
 	print $File_Log "\t\t$id: $person{Name}\n"	if defined $Option_Verbose;
@@ -917,7 +1023,7 @@ sub parsePerson($){
 	$person{Prefix}			= nextLine();
 	#text	Alias
 	my $alias				= 1;
-	$alias					= nextLine()		if $Compiler_Version eq '4.00';
+	$alias					= nextLine()		if $Container_Version eq '4.00';
 	$person{Alias}			= ();
 	for (1 .. $alias) { push @{ $person{Alias} }, nextLine(); }
 	#text	Descr
@@ -947,20 +1053,30 @@ sub parsePerson($){
 	#text	InRoomText
 	$person{InRoomText}		= nextLine();
 	#number	Gender
-	$person{Gender}			= 0					if $Compiler_Version eq '3.80';
-	$person{Gender}			= nextLine()		if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
+	$person{Gender}			= 0					if $Container_Version eq '3.80';
+	$person{Gender}			= nextLine()		if $Container_Version eq '3.90' or $Container_Version eq '4.00';
 	#Resources
-	$person{Res1}			= parseResource()	if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
-	$person{Res2}			= parseResource()	if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
-	$person{Res3}			= parseResource()	if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
-	$person{Res4}			= parseResource()	if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
+	$person{Res1}			= parseResource()	if $Container_Version eq '3.90' or $Container_Version eq '4.00';
+	$person{Res2}			= parseResource()	if $Container_Version eq '3.90' or $Container_Version eq '4.00';
+	$person{Res3}			= parseResource()	if $Container_Version eq '3.90' or $Container_Version eq '4.00';
+	$person{Res4}			= parseResource()	if $Container_Version eq '3.90' or $Container_Version eq '4.00';
 	#battle	Battle
 	$person{BattleStats}	= parseBattle()		if $Story{EnableBattle};
 	return \%person;
 }
-sub parseGroup($){
-	my $id		= shift;
+sub parseGroup(){
+	my $id		= @Groups;
 	my %group	= ();
+	#References
+	$group{RoomReferences}		= [];
+	$group{ObjectReferences}	= [];
+	$group{TaskReferences}		= [];
+	$group{EventReferences}		= [];
+	$group{PersonReferences}	= [];
+	$group{GroupReferences}		= [];
+	$group{SynonymReferences}	= [];
+	$group{VariableReferences}	= [];
+	$group{ALRReferences}		= [];
 	#text	Name
 	$group{Name}			= nextLine();
 	print $File_Log "\t\t$id: $group{Name}\n"	if defined $Option_Verbose;
@@ -969,9 +1085,19 @@ sub parseGroup($){
 	for my $room (1 .. $#Rooms){ push @{ $group{Rooms} }, $room if nextLine(); }
 	return \%group;
 }
-sub parseSynonym($){
-	my $id		= shift;
+sub parseSynonym(){
+	my $id		= @Synonyms;
 	my %synonym	= ();
+	#References
+	$synonym{RoomReferences}		= [];
+	$synonym{ObjectReferences}		= [];
+	$synonym{TaskReferences}		= [];
+	$synonym{EventReferences}		= [];
+	$synonym{PersonReferences}		= [];
+	$synonym{GroupReferences}		= [];
+	$synonym{SynonymReferences}		= [];
+	$synonym{VariableReferences}	= [];
+	$synonym{ALRReferences}			= [];
 	#text	Original
 	$synonym{Original}			= nextLine();
 	#text	Replacement
@@ -979,22 +1105,42 @@ sub parseSynonym($){
 	print $File_Log "\t\t$id: $synonym{Replacement} -> $synonym{Original}\n"	if defined $Option_Verbose;
 	return \%synonym;
 }
-sub parseVariable($){
-	my $id			= shift;
+sub parseVariable(){
+	my $id			= @Variables;
 	my %variable	= ();
+	#References
+	$variable{RoomReferences}		= [];
+	$variable{ObjectReferences}		= [];
+	$variable{TaskReferences}		= [];
+	$variable{EventReferences}		= [];
+	$variable{PersonReferences}		= [];
+	$variable{GroupReferences}		= [];
+	$variable{SynonymReferences}	= [];
+	$variable{VariableReferences}	= [];
+	$variable{ALRReferences}		= [];
 	#text	Name
 	$variable{Name}			= nextLine();
 	#number	Type
-	$variable{Type}			= 0					if $Compiler_Version eq '3.90';
-	$variable{Type}			= nextLine()		if $Compiler_Version eq '4.00';
+	$variable{Type}			= 0					if $Container_Version eq '3.90';
+	$variable{Type}			= nextLine()		if $Container_Version eq '4.00';
 	#text	Value
 	$variable{Value}		= nextLine();
 	print $File_Log "\t\t$id: $variable{Name} ($variable{Type}) = $variable{Value}\n"	if defined $Option_Verbose;
 	return \%variable;
 }
-sub parseALR($){
-	my $id		= shift;
+sub parseALR(){
+	my $id	= @ALRs;
 	my %alr	= ();
+	#References
+	$alr{RoomReferences}		= [];
+	$alr{ObjectReferences}		= [];
+	$alr{TaskReferences}		= [];
+	$alr{EventReferences}		= [];
+	$alr{PersonReferences}		= [];
+	$alr{GroupReferences}		= [];
+	$alr{SynonymReferences}		= [];
+	$alr{VariableReferences}	= [];
+	$alr{ALRReferences}			= [];
 	#text	Original
 	$alr{Original}			= nextLine();
 	#text	Replacement
@@ -1012,15 +1158,15 @@ sub parseResource(){
 		#text	SoundFile
 		$resource{SoundFile}	= nextLine();
 		#number	SoundLen
-		$resource{SoundSize}	= 0				if $Compiler_Version eq '3.90';
-		$resource{SoundSize}	= nextLine()	if $Compiler_Version eq '4.00';
+		$resource{SoundSize}	= 0				if $Container_Version eq '3.90';
+		$resource{SoundSize}	= nextLine()	if $Container_Version eq '4.00';
 	}
 	if($Story{EnableGraphics}){
 		#text	GraphicFile
 		$resource{GraphicFile}	= nextLine();
 		#number	GraphicLen
-		$resource{GraphicSize}	= 0				if $Compiler_Version eq '3.90';
-		$resource{GraphicSize}	= nextLine()	if $Compiler_Version eq '4.00';
+		$resource{GraphicSize}	= 0				if $Container_Version eq '3.90';
+		$resource{GraphicSize}	= nextLine()	if $Container_Version eq '4.00';
 	}
 	return \%resource;
 }
@@ -1056,7 +1202,7 @@ sub parseExit(){
 		$exit{Var1}		= nextLine();
 		$exit{Var2}		= nextLine();
 		$exit{Var3}		= 0;
-		$exit{Var3}		= nextLine()			if $Compiler_Version eq '4.00';
+		$exit{Var3}		= nextLine()			if $Container_Version eq '4.00';
 	}
 	return \%exit;
 }
@@ -1084,11 +1230,11 @@ sub parseRestriction(){
 	}
 	if($restriction{Type} eq 4){
 		$restriction{Var1}	= nextLine();
-		$restriction{Var1}++				if $Compiler_Version eq '3.90' && $restriction{Var1};
+		$restriction{Var1}++				if $Container_Version eq '3.90' && $restriction{Var1};
 		$restriction{Var2}	= nextLine();
 		$restriction{Var3}	= nextLine();
 		$restriction{Var4}	= '';
-		$restriction{Var4}	= nextLine()	if $Compiler_Version eq '4.00';
+		$restriction{Var4}	= nextLine()	if $Container_Version eq '4.00';
 	}
 	$restriction{FailureText}	= nextLine();
 	return \%restriction;
@@ -1097,7 +1243,7 @@ sub parseAction(){
 	my %action;
 	#number	Type
 	$action{Type}		= nextLine();
-	$action{Type}++		if $action{Type} > 4 && $Compiler_Version eq '3.90';
+	$action{Type}++		if $action{Type} > 4 && $Container_Version eq '3.90';
 	if($action{Type} eq 0){
 		$action{Var1}	= nextLine();
 		$action{Var2}	= nextLine();
@@ -1116,12 +1262,12 @@ sub parseAction(){
 		$action{Var1}	= nextLine();
 		$action{Var2}	= nextLine();
 		$action{Var3}	= nextLine();
-		$action{Expr}	= nextLine()	if $Compiler_Version eq '4.00';
-		$action{Expr}	= nextLine()	if $Compiler_Version eq '3.90' && $action{Var2} eq 5;
-		$action{Expr}	= ''			if $Compiler_Version eq '3.90' && $action{Var2} != 5;
-		$action{Var5}	= nextLine()	if $Compiler_Version eq '4.00';
-		$action{Var5}	= nextLine()	if $Compiler_Version eq '3.90' && $action{Var2} != 5;
-		$action{Var5}	= 0				if $Compiler_Version eq '3.90' && $action{Var2} eq 5;
+		$action{Expr}	= nextLine()	if $Container_Version eq '4.00';
+		$action{Expr}	= nextLine()	if $Container_Version eq '3.90' && $action{Var2} eq 5;
+		$action{Expr}	= ''			if $Container_Version eq '3.90' && $action{Var2} != 5;
+		$action{Var5}	= nextLine()	if $Container_Version eq '4.00';
+		$action{Var5}	= nextLine()	if $Container_Version eq '3.90' && $action{Var2} != 5;
+		$action{Var5}	= 0				if $Container_Version eq '3.90' && $action{Var2} eq 5;
 	}
 	if($action{Type} eq 4){
 		$action{Var1}	= nextLine();
@@ -1132,10 +1278,10 @@ sub parseAction(){
 	}
 	if($action{Type} eq 6){
 		$action{Var1}	= nextLine();
-		$action{Var2}	= 0				if $Compiler_Version eq '3.90';
-		$action{Var2}	= nextLine()	if $Compiler_Version eq '4.00';
-		$action{Var3}	= 0				if $Compiler_Version eq '3.90';
-		$action{Var3}	= nextLine()	if $Compiler_Version eq '4.00';
+		$action{Var2}	= 0				if $Container_Version eq '3.90';
+		$action{Var2}	= nextLine()	if $Container_Version eq '4.00';
+		$action{Var3}	= 0				if $Container_Version eq '3.90';
+		$action{Var3}	= nextLine()	if $Container_Version eq '4.00';
 	}
 	if($action{Type} eq 7){
 		$action{Var1}	= nextLine();
@@ -1174,14 +1320,14 @@ sub parseWalk(){
 	#number	ObjectTask
 	$walk{ObjectTask}		= nextLine();
 	#number	StoppingTask
-	$walk{StoppingTask}		= 0				if $Compiler_Version eq '3.80';
-	$walk{StoppingTask}		= nextLine()	if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
+	$walk{StoppingTask}		= 0				if $Container_Version eq '3.80';
+	$walk{StoppingTask}		= nextLine()	if $Container_Version eq '3.90' or $Container_Version eq '4.00';
 	#number	MeetChar
-	$walk{MeetChar}			= 0				if $Compiler_Version eq '3.80' or $Compiler_Version eq '3.90';
-	$walk{MeetChar}			= nextLine()	if $Compiler_Version eq '4.00';
+	$walk{MeetChar}			= 0				if $Container_Version eq '3.80' or $Container_Version eq '3.90';
+	$walk{MeetChar}			= nextLine()	if $Container_Version eq '4.00';
 	#text	ChangedDesc
-	$walk{ChangedDesc}		= ''			if $Compiler_Version eq '3.80';
-	$walk{ChangedDesc}		= nextLine()	if $Compiler_Version eq '3.90' or $Compiler_Version eq '4.00';
+	$walk{ChangedDesc}		= ''			if $Container_Version eq '3.80';
+	$walk{ChangedDesc}		= nextLine()	if $Container_Version eq '3.90' or $Container_Version eq '4.00';
 	#	{WALK:#Rooms_#Times}
 	$walk{Stops}				= ();
 	for (1 .. $stops){
@@ -1191,6 +1337,145 @@ sub parseWalk(){
 		push @{ $walk{Stops} }, \%stop;
 	}
 	return \%walk;
+}
+##Generate symbolic names, printing to mapping file if called for
+sub generateSymbols(){
+	{	#Rooms
+		print $File_Symbol_Out "#\t$#Rooms Rooms\n"	if defined $Option_Generate;
+		for my $room (1 .. $#Rooms){
+			#Find a symbolic name
+			my $name			= symbolic($Rooms[$room]{Short});
+			#Write to mapping file if called for
+			if (defined $Option_Generate){
+				print $File_Symbol_Out	'#'						unless	defined $Symbol_Room[$room];
+				print $File_Symbol_Out "Room$room\t = ";
+				print $File_Symbol_Out "'TODO'"				unless	defined $Symbol_Room[$room];
+				print $File_Symbol_Out "'$Symbol_Room[$room]'"	if		defined $Symbol_Room[$room];
+				print $File_Symbol_Out "\t# $name\n";
+			}
+			#Store the calculated symbolic name
+			$Symbol_Room[$room]	= $name		unless defined $Symbol_Room[$room];
+		}
+	}
+	{	#Objects
+		print $File_Symbol_Out "#\t$#Objects Objects\n"	if defined $Option_Generate;
+		for my $object (1 .. $#Objects){
+			#Find a symbolic name
+			#TODO: When aggressive naming is in use, also consider aliases
+			my $name			= symbolic($Objects[$object]{Prefix}.' '.$Objects[$object]{Short});
+			#Write to mapping file if called for
+			if (defined $Option_Generate){
+				print $File_Symbol_Out	'#'							unless	defined $Symbol_Object[$object];
+				print $File_Symbol_Out "Object$object\t = ";
+				print $File_Symbol_Out "'TODO'"					unless	defined $Symbol_Object[$object];
+				print $File_Symbol_Out "'$Symbol_Object[$object]'"	if		defined $Symbol_Object[$object];
+				print $File_Symbol_Out "\t# $name\n";
+			}
+			#Store the calculated symbolic name
+			$Symbol_Object[$object]	= $name		unless defined $Symbol_Object[$object];
+		}
+	}
+	{	#Tasks
+		print $File_Symbol_Out "#\t$#Tasks Tasks\n"	if defined $Option_Generate;
+		for my $task (1 .. $#Tasks){
+			#Find a symbolic name
+			my @commands		= @{ $Tasks[$task]{Commands} };
+			my $name			= '';
+			foreach my $command (@commands){
+				$command	= symbolic($command);
+				$name		= $command	if length($command) > length($name);
+			}
+			#Write to mapping file if called for
+			if (defined $Option_Generate){
+				print $File_Symbol_Out	'#'						unless	defined $Symbol_Task[$task];
+				print $File_Symbol_Out "Task$task\t = ";
+				print $File_Symbol_Out "'TODO'"				unless	defined $Symbol_Task[$task];
+				print $File_Symbol_Out "'$Symbol_Task[$task]'"	if		defined $Symbol_Task[$task];
+				print $File_Symbol_Out "\t# $name\n";
+			}
+			#Store the calculated symbolic name
+			$Symbol_Task[$task]	= $name		unless defined $Symbol_Task[$task];
+		}
+	}
+	{	#Events
+		print $File_Symbol_Out "#\t$#Events Events\n"	if defined $Option_Generate;
+		for my $event (1 .. $#Events){
+			#Find a symbolic name
+			my $name			= symbolic($Events[$event]{Short});
+			#Write to mapping file if called for
+			if (defined $Option_Generate){
+				print $File_Symbol_Out	'#'							unless	defined $Symbol_Event[$event];
+				print $File_Symbol_Out "Event$event\t = ";
+				print $File_Symbol_Out "'TODO'"						unless	defined $Symbol_Event[$event];
+				print $File_Symbol_Out "'$Symbol_Event[$event]'"	if		defined $Symbol_Event[$event];
+				print $File_Symbol_Out "\t# $name\n";
+			}
+			#Store the calculated symbolic name
+			$Symbol_Event[$event]	= $name		unless defined $Symbol_Event[$event];
+		}
+	
+	}
+	{	#Persons
+		print $File_Symbol_Out "#\t$#Persons Persons\n"	if defined $Option_Generate;
+		for my $person (1 .. $#Persons){
+			#Find a symbolic name
+			#TODO: When aggressive naming is in use, also consider aliases
+			my $name			= symbolic($Persons[$person]{Prefix}.' '.$Persons[$person]{Name});
+			#Write to mapping file if called for
+			if (defined $Option_Generate){
+				print $File_Symbol_Out	'#'							unless	defined $Symbol_Person[$person];
+				print $File_Symbol_Out "Person$person\t = ";
+				print $File_Symbol_Out "'TODO'"					unless	defined $Symbol_Person[$person];
+				print $File_Symbol_Out "'$Symbol_Person[$person]'"	if		defined $Symbol_Person[$person];
+				print $File_Symbol_Out "\t# $name\n";
+			}
+			#Store the calculated symbolic name
+			$Symbol_Person[$person]	= $name		unless defined $Symbol_Person[$person];
+		}
+	}
+	{	#RoomGroups
+		print $File_Symbol_Out "#\t$#Groups Groups\n"	if defined $Option_Generate;
+		for my $group (1 .. $#Groups){
+			#Find a symbolic name
+			my $name			= symbolic($Groups[$group]{Name});
+			#Write to mapping file if called for
+			if (defined $Option_Generate){
+				print $File_Symbol_Out	'#'							unless	defined $Symbol_Group[$group];
+				print $File_Symbol_Out "Group$group\t = ";
+				print $File_Symbol_Out "'TODO'"						unless	defined $Symbol_Group[$group];
+				print $File_Symbol_Out "'$Symbol_Group[$group]'"	if		defined $Symbol_Group[$group];
+				print $File_Symbol_Out "\t# $name\n";
+			}
+			#Store the calculated symbolic name
+			$Symbol_Group[$group]	= $name		unless defined $Symbol_Group[$group];
+		}
+	}
+	{	#Variables
+		print $File_Symbol_Out "#\t$#Variables Variables\n"	if defined $Option_Generate;
+		for my $variable (1 .. $#Variables){
+			#Find a symbolic name
+			my $name			= symbolic($Variables[$variable]{Name});
+			#Write to mapping file if called for
+			if (defined $Option_Generate){
+				print $File_Symbol_Out	'#'								unless	defined $Symbol_Variable[$variable];
+				print $File_Symbol_Out "Variable$variable\t = ";
+				print $File_Symbol_Out "'TODO'"						unless	defined $Symbol_Variable[$variable];
+				print $File_Symbol_Out "'$Symbol_Variable[$variable]'"	if		defined $Symbol_Variable[$variable];
+				print $File_Symbol_Out "\t# $name\n";
+			}
+			#Store the calculated symbolic name
+			$Symbol_Variable[$variable]	= $name		unless defined $Symbol_Variable[$variable];
+		}
+	}
+}
+sub symbolic($){
+	my $text	= shift;
+	return ''	unless defined $text;
+#	$text		=~ s/[-_\"\[\]\\%]//g;		# Trim all unwanted characters
+	$text		=~ s/[^a-z0-9\s]//ig;		# Remove any non-alphanumeric characters
+	$text		=~ s/\s+/ /g;				# Convert all whitespace to spaces, and trim multiples
+	$text		=~ s/^\s+|\s+$//g;			# Trim leading/trailing whitespace
+	return $text;
 }
 ##Analyzing cross-type
 sub analyze(){
@@ -1209,6 +1494,35 @@ sub analyze(){
 	#TODO: Analyze synonyms
 	#TODO: Analyze variables
 	#TODO: Analyze ALRs
+	#Mapping tables
+	print $File_Log "Static Object IDs:\n";
+	for my $id (1 .. $#ObjectStatic){
+		print $File_Log "\t$id -> $ObjectStatic[$id] (".nameObject($ObjectStatic[$id]).")\n";
+	}
+	print $File_Log "Portable Object IDs:\n";
+	for my $id (1 .. $#ObjectPortable){
+		print $File_Log "\t$id -> $ObjectPortable[$id] (".nameObject($ObjectPortable[$id]).")\n";
+	}
+	print $File_Log "Openable Object IDs:\n";
+	for my $id (1 .. $#ObjectOpenable){
+		print $File_Log "\t$id -> $ObjectOpenable[$id] (".nameObject($ObjectOpenable[$id]).")\n";
+	}
+	print $File_Log "Stateful Object IDs:\n";
+	for my $id (1 .. $#ObjectStateful){
+		print $File_Log "\t$id -> $ObjectStateful[$id] (".nameObject($ObjectStateful[$id]).")\n";
+	}
+	print $File_Log "Holder Object IDs:\n";
+	for my $id (1 .. $#ObjectHolder){
+		print $File_Log "\t$id -> $ObjectHolder[$id] (".nameObject($ObjectHolder[$id]).")\n";
+	}
+	print $File_Log "Container Object IDs:\n";
+	for my $id (1 .. $#ObjectContainer){
+		print $File_Log "\t$id -> $ObjectContainer[$id] (".nameObject($ObjectContainer[$id]).")\n";
+	}
+	print $File_Log "Supporter Object IDs:\n";
+	for my $id (1 .. $#ObjectSurface){
+		print $File_Log "\t$id -> $ObjectSurface[$id] (".nameObject($ObjectSurface[$id]).")\n";
+	}
 }
 sub analyzeRoom($){
 	my $room		= shift;
@@ -1231,6 +1545,11 @@ sub analyzeRoom($){
 			# TaskID
 			my $task		= "UNKNOWN TASK $var1";
 			$task			= nameTask($var1)	if $var1 < @Tasks;
+			#Record reference between room and task
+			push @{ $Rooms[$room]{TaskReferences} },
+				{ id => $var1,		type => 'RestrainedBy'};
+			push @{ $Tasks[$var1]{RoomReferences} }, 
+				{ id => $room,	type => 'Restraining'};
 			# ExpectedState determines condition
 			my $condition	= "UNKNOWN TASK-CONDITION $var2";
 			$condition		= 'if'		if $var2 eq 0;
@@ -1241,8 +1560,13 @@ sub analyzeRoom($){
 		# 1: ObjectState
 		if($var3 eq 1) {
 			# ObjectID
-			my $objectID	= $ObjectOpenable[$var1];
-			my $object		= nameTask($objectID);
+			my $objectID	= $ObjectStateful[$var1];
+			my $object		= nameObject($objectID);
+			#Record reference between room and object
+			push @{ $Rooms[$room]{ObjectReferences} },
+				{ id => $objectID,		type => 'RestrainedBy'};
+			push @{ $Objects[$objectID]{RoomReferences} }, 
+				{ id => $room,	type => 'Restraining'};
 			# ExpectedState		TODO
 			my $state		= "UNKNOWN STATE $var2";
 			#Assemble full text
@@ -1295,7 +1619,11 @@ sub analyzeTask($){
 			if ($var1 > 2 && $var1 <= (2 + @ObjectPortable)) {
 				my $objectID	= $ObjectPortable[$var1-2];
 				$object			= nameObject($objectID);
-				$ObjectTasks[$objectID][$task]++;
+				#Record reference between task and object
+				push @{ $Objects[$objectID]{TaskReferences} },
+					{ id => $task,		type => 'Restraining'};
+				push @{ $Tasks[$task]{ObjectReferences} },
+					{ id => $objectID,	type => 'RestrainedBy'};
 			}
 			#ConditionType
 			my $condition	= "UNKNOWN CONDITION $var2";
@@ -1323,7 +1651,11 @@ sub analyzeTask($){
 			if ($var2 % 6 eq 0) {
 				my $roomID		= $var3;
 				$location		= nameRoom($roomID);
-				$RoomTasks[$roomID][$task]++;
+				#Record reference between task and room
+				push @{ $Rooms[$roomID]{TaskReferences} },
+					{ id => $task,		type => 'Restraining'};
+				push @{ $Tasks[$task]{RoomReferences} }, 
+					{ id => $roomID,	type => 'RestrainedBy'};
 			}
 			# 1-3: Person
 			if ($var2 % 6 >= 1 && $var2 % 6 <= 3) {
@@ -1335,20 +1667,32 @@ sub analyzeTask($){
 				if ($var3 > 1 && $var3 <= (1 + @Persons)){
 					my $personID	= $var3-1;
 					$location		= 'by '.namePerson($personID);
-					$TaskPersons[$task][$personID]++;
+					#Record reference between task and person
+					push @{ $Persons[$personID]{TaskReferences} },
+						{ id => $task,		type => 'Restraining'};
+					push @{ $Tasks[$task]{PersonReferences} }, 
+						{ id => $personID,	type => 'RestrainedBy'};
 				}
 			}
-			#4: Container
+			#4-5: Container
 			if ($var2 % 6 eq 4) {
 				my $objectID	= $ObjectContainer[$var3];
 				$location		= nameObject($objectID);
-				$ObjectTasks[$objectID][$task]++;
+				#Record reference between task and object
+				push @{ $Objects[$objectID]{TaskReferences} },
+					{ id => $task,		type => 'Restraining'};
+				push @{ $Tasks[$task]{ObjectReferences} },
+					{ id => $objectID,	type => 'RestrainedBy'};
 			}
 			#5: Supporter
 			if ($var2 % 6 eq 5) {
 				my $objectID	= $ObjectSurface[$var3];
 				$location		= nameObject($objectID);
-				$ObjectTasks[$objectID][$task]++;
+				#Record reference between task and object
+				push @{ $Objects[$objectID]{TaskReferences} },
+					{ id => $task,		type => 'Restraining'};
+				push @{ $Tasks[$task]{ObjectReferences} },
+					{ id => $objectID,	type => 'RestrainedBy'};
 			}
 			#Assemble the full text
 			$text	= "Unless $object is $condition $location";
@@ -1362,10 +1706,14 @@ sub analyzeTask($){
 			# 0: Referenced
 			$object			= 'referenced object'		if $var1 eq 0;
 			# 1+: Openable ObjectID
-			if ($var1 > 0 && $var1 <= @ObjectOpenable) {
-				my $objectID	= $ObjectOpenable[$var1];
+			if ($var1 > 0 && $var1 <= @ObjectStateful) {
+				my $objectID	= $ObjectStateful[$var1];
 				$object			= nameObject($objectID);
-				$ObjectTasks[$objectID][$task]++;
+				#Record reference between task and object
+				push @{ $Objects[$objectID]{TaskReferences} },
+					{ id => $task,		type => 'Restraining'};
+				push @{ $Tasks[$task]{ObjectReferences} },
+					{ id => $objectID,	type => 'RestrainedBy'};
 			}
 			#State
 			my $state		= "UNKNOWN STATE $var2";
@@ -1377,14 +1725,18 @@ sub analyzeTask($){
 			my $var1	= $restriction{Var1};
 			my $var2	= $restriction{Var2};
 			#TaskID
-			my $task		= "UNKNOWN TASK $var1";
+			my $restrictor	= "UNKNOWN TASK $var1";
 			# 0: Referenced
-			$task			= 'all tasks'		if $var1 eq 0;
+			$restrictor			= 'all tasks'		if $var1 eq 0;
 			# 1+: TaskID
 			if ($var1 > 0 && $var1 <= @Tasks) {
 				my $taskID	= $var1;
-				$task		= nameTask($taskID)
-				#TODO Add task-task relation
+				$restrictor	= nameTask($taskID);
+				#Record reference between task and task
+				push @{ $Tasks[$taskID]{TaskReferences} },
+					{ id => $task,		type => 'Restraining'};
+				push @{ $Tasks[$task]{TaskReferences} },
+					{ id => $taskID,	type => 'RestrainedBy'};
 			}
 			#State
 			my $state		= "UNKNOWN STATE $var2";
@@ -1393,7 +1745,7 @@ sub analyzeTask($){
 			# 1: Not Performed
 			$state			= 'not performed'	if $var2 eq 1;
 			#Assemble the full text
-			$text	= "Unless $task is $state";
+			$text	= "Unless $restrictor is $state";
 		}
 		#Person:		PersonID, Condition, Location
 		if($restriction{Type} eq 3){
@@ -1410,7 +1762,11 @@ sub analyzeTask($){
 			if ($var1 > 1 && $var1 <= (1 + @Persons)){
 				my $personID	= $var1-1;
 				$person			= namePerson($personID);
-				$TaskPersons[$task][$personID]++;
+				#Record reference between task and person
+				push @{ $Persons[$personID]{TaskReferences} },
+					{ id => $task,		type => 'Restraining'};
+				push @{ $Tasks[$task]{PersonReferences} }, 
+					{ id => $personID,	type => 'RestrainedBy'};
 			}
 			#Condition
 			my $condition	= "UNKNOWN CONDITION $var2";
@@ -1442,7 +1798,11 @@ sub analyzeTask($){
 				if ($var3 > 1 && $var3 <= (1 + @Persons)) {
 					my $personID	= $var3-1;
 					$location		= namePerson($personID);
-					$TaskPersons[$task][$personID]++;
+					#Record reference between task and person
+					push @{ $Persons[$personID]{TaskReferences} },
+						{ id => $task,		type => 'Restraining'};
+					push @{ $Tasks[$task]{PersonReferences} }, 
+						{ id => $personID,	type => 'RestrainedBy'};
 				}
 			}
 			#2-3: Blank
@@ -1453,17 +1813,25 @@ sub analyzeTask($){
 			if ($var2 eq 4 or $var2 eq 5) {
 				my $objectID	= $ObjectSitStandable[$var3];
 				$location		= nameObject($objectID);
-				$ObjectTasks[$objectID][$task]++;
+				#Record reference between task and object
+				push @{ $Objects[$objectID]{TaskReferences} },
+					{ id => $task,		type => 'Restraining'};
+				push @{ $Tasks[$task]{ObjectReferences} },
+					{ id => $objectID,	type => 'RestrainedBy'};
 			}
 			#6: Lieable
 			if ($var2 eq 6) {
 				my $objectID	= $ObjectLieable[$var3];
 				$location		= nameObject($objectID);
-				$ObjectTasks[$objectID][$task]++;
+				#Record reference between task and object
+				push @{ $Objects[$objectID]{TaskReferences} },
+					{ id => $task,		type => 'Restraining'};
+				push @{ $Tasks[$task]{ObjectReferences} },
+					{ id => $objectID,	type => 'RestrainedBy'};
 			}
 			#7: Gender
 			if ($var2 eq 7) {
-				$location		= nameGender($var3);
+				$location		= 'a '.nameGender($var3);
 			}
 			#Assemble the full text
 			$text	= "Unless $person is $condition $location";
@@ -1492,24 +1860,28 @@ sub analyzeTask($){
 				my $variableID	= $var1-1;
 				$variable		= nameVariable($variableID);
 				$numeric		= 1 if $Variables[$variableID]{Type} eq 0;
-				$TaskVariables[$task][$variableID]++;
+				#Record reference between task and variable
+				push @{ $Variables[$variableID]{TaskReferences} },
+					{ id => $task,		type => 'Restraining'};
+				push @{ $Tasks[$task]{VariableReferences} },
+					{ id => $variableID,	type => 'RestrainedBy'};
 			}
 			#Operator determines comparator
 			my $operator	= "UNKNOWN OPERATOR $var2";
 			my $comparator	= "UNKNOWN COMPARATOR $var2";
 			if ($numeric) {	# Numeric variables
 				# 0,10: <
-				$operator		= '<'	if $var2 % 10 eq 0;
+				$operator		= 'less than'			if $var2 % 10 eq 0;
 				# 1,11: <
-				$operator		= '<='	if $var2 % 10 eq 1;
+				$operator		= 'less or equal than'	if $var2 % 10 eq 1;
 				# 2,12: ==
-				$operator		= '=='	if $var2 % 10 eq 2;
+				$operator		= 'equal to'			if $var2 % 10 eq 2;
 				# 3,13: >=
-				$operator		= '>='	if $var2 % 10 eq 3;
+				$operator		= 'greater or equal to'	if $var2 % 10 eq 3;
 				# 4,14: >
-				$operator		= '>'	if $var2 % 10 eq 4;
+				$operator		= 'greater than'		if $var2 % 10 eq 4;
 				# 5,15: !=
-				$operator		= '!='	if $var2 % 10 eq 5;
+				$operator		= 'different to'		if $var2 % 10 eq 5;
 				#Direct value comparison
 				if ($var2 < 10){
 					$comparator		= $var3;
@@ -1520,19 +1892,23 @@ sub analyzeTask($){
 					if ($var3 > 0 && $var3 <= @Variables) {
 						my $variableID	= $var3;
 						$comparator		= nameVariable($variableID);
-						$TaskVariables[$task][$variableID]++;
+						#Record reference between task and variable
+						push @{ $Variables[$variableID]{TaskReferences} },
+							{ id => $task,		type => 'Restraining'};
+						push @{ $Tasks[$task]{VariableReferences} },
+							{ id => $variableID,	type => 'RestrainedBy'};
 					}
 				}
 			}
 			else {	# String variables
 				$comparator	= $var4;
 				# 0: ==
-				$operator	= '=='	if $var2 eq 0;
+				$operator	= 'equal to'		if $var2 eq 0;
 				# 1: !=
-				$operator	= '!='	if $var2 eq 1;
+				$operator	= 'different to'	if $var2 eq 1;
 			}
 			#Assemble the full text
-			$text	= "Unless $variable $operator $comparator";
+			$text	= "Unless $variable is $operator $comparator";
 			#Formula	TODO
 			$text	.= " UNKNOWN FORMULA $var4"	unless $var4 eq '';
 		}
@@ -1560,7 +1936,11 @@ sub analyzeTask($){
 			if ($var1 > 2 && $var1 <= (2 + @ObjectPortable)) {
 				my $objectID	= $ObjectPortable[$var1-2];
 				$object			= nameObject($objectID);
-				$ObjectTasks[$objectID][$task]++;
+				#Record reference between task and object
+				push @{ $Objects[$objectID]{TaskReferences} },
+					{ id => $task,		type => 'ActionedBy'};
+				push @{ $Tasks[$task]{ObjectReferences} },
+					{ id => $objectID,	type => 'Actioning'};
 			}
 			#DestinationType determines the value of the Location
 			my $destination	= "UNKNOWN DESTINATION $var2 TO $var3";
@@ -1572,26 +1952,42 @@ sub analyzeTask($){
 				if ($var3 > 0 && $var3 <= @Rooms) {
 					my $roomID		= $var3;
 					$destination	= 'to '.nameRoom($roomID);
-					$RoomTasks[$roomID][$task]++;
+					#Record reference between task and room
+					push @{ $Rooms[$roomID]{TaskReferences} },
+						{ id => $task,		type => 'ActionedBy'};
+					push @{ $Tasks[$task]{RoomReferences} },
+						{ id => $roomID,	type => 'Actioning'};
 				}
 			}
 			# 1: RoomGroup
 			if ($var2 eq 1) {
 				my $groupID		= $var3;
 				$destination	= 'to random room in '.nameGroup($groupID);
-				$TaskGroups[$task][$groupID]++;
+				#Record reference between task and roomgroup
+				push @{ $Groups[$groupID]{TaskReferences} },
+					{ id => $task,		type => 'ActionedBy'};
+				push @{ $Tasks[$task]{GroupReferences} },
+					{ id => $groupID,	type => 'Actioning'};
 			}
 			# 2: Container
 			if ($var2 eq 2) {
 				my $objectID	= $ObjectContainer[$var3];
 				$destination	= 'inside '.nameObject($objectID);
-				$ObjectTasks[$objectID][$task]++;
+				#Record reference between task and object
+				push @{ $Objects[$objectID]{TaskReferences} },
+					{ id => $task,		type => 'ActionedBy'};
+				push @{ $Tasks[$task]{ObjectReferences} },
+					{ id => $objectID,	type => 'Actioning'};
 			}				
 			# 3: Supporter
 			if ($var2 eq 3) {
 				my $objectID	= $ObjectSurface[$var3];
 				$destination	= 'on top of '.nameObject($objectID);
-				$ObjectTasks[$objectID][$task]++;
+				#Record reference between task and object
+				push @{ $Objects[$objectID]{TaskReferences} },
+					{ id => $task,		type => 'ActionedBy'};
+				push @{ $Tasks[$task]{ObjectReferences} },
+					{ id => $objectID,	type => 'Actioning'};
 			}
 			# 4: Carried by Person
 			if ($var2 eq 4) {
@@ -1604,7 +2000,11 @@ sub analyzeTask($){
 				if ($var3 > 1 && $var3 <= 1 + @Persons) {
 					my $personID	= $var3 - 1;
 					$target			= namePerson($personID);
-					$TaskPersons[$task][$personID]++;
+					#Record reference between task and person
+					push @{ $Persons[$personID]{TaskReferences} },
+						{ id => $task,		type => 'ActionedBy'};
+					push @{ $Tasks[$task]{PersonReferences} },
+						{ id => $personID,	type => 'Actioning'};
 				}
 				$destination	= "to $target (carried)";
 			}
@@ -1619,7 +2019,11 @@ sub analyzeTask($){
 				if ($var3 > 1 && $var3 <= 1 + @Persons) {
 					my $personID	= $var3 - 1;
 					$target			= namePerson($personID);
-					$TaskPersons[$task][$personID]++;
+					#Record reference between task and person
+					push @{ $Persons[$personID]{TaskReferences} },
+						{ id => $task,		type => 'ActionedBy'};
+					push @{ $Tasks[$task]{PersonReferences} },
+						{ id => $personID,	type => 'Actioning'};
 				}
 				$destination	= "to $target (worn)";
 			}
@@ -1634,7 +2038,11 @@ sub analyzeTask($){
 				if ($var3 > 1 && $var3 <= 1 + @Persons) {
 					my $personID	= $var3 - 1;
 					$target			= namePerson($personID);
-					$TaskPersons[$task][$personID]++;
+					#Record reference between task and person
+					push @{ $Persons[$personID]{TaskReferences} },
+						{ id => $task,		type => 'ActionedBy'};
+					push @{ $Tasks[$task]{PersonReferences} },
+						{ id => $personID,	type => 'Actioning'};
 				}
 				$destination	= "to location of $target";
 			}
@@ -1656,7 +2064,11 @@ sub analyzeTask($){
 			if ($var1 > 1 && $var1 <= (1 + @Persons)) {
 				my $personID	= $var1-1;
 				$person			= namePerson($personID);
-				$TaskPersons[$task][$personID]++;
+				#Record reference between task and person
+				push @{ $Persons[$personID]{TaskReferences} },
+					{ id => $task,		type => 'ActionedBy'};
+				push @{ $Tasks[$task]{PersonReferences} },
+					{ id => $personID,	type => 'Actioning'};
 			}
 			#DestinationType determines the value of the Location
 			my $destination	= "UNKNOWN DESTINATION $var2 TO $var3";
@@ -1668,14 +2080,22 @@ sub analyzeTask($){
 				if ($var3 > 0 && $var3 <= @Rooms) {
 					my $roomID		= $var3;
 					$destination	= 'to '.nameRoom($roomID);
-					$RoomTasks[$roomID][$task]++;
+					#Record reference between task and room
+					push @{ $Rooms[$roomID]{TaskReferences} },
+						{ id => $task,		type => 'ActionedBy'};
+					push @{ $Tasks[$task]{RoomReferences} },
+						{ id => $roomID,	type => 'Actioning'};
 				}
 			}
 			# 1: RoomGroup
 			if ($var2 eq 1) {
 				my $groupID		= $var3;
 				$destination	= 'to random room in '.nameGroup($groupID);
-				$TaskGroups[$task][$groupID]++;
+				#Record reference between task and roomgroup
+				push @{ $Groups[$groupID]{TaskReferences} },
+					{ id => $task,		type => 'ActionedBy'};
+				push @{ $Tasks[$task]{GroupReferences} },
+					{ id => $groupID,	type => 'Actioning'};
 			}
 			# 2: Location of Person
 			if ($var2 eq 2) {
@@ -1688,7 +2108,11 @@ sub analyzeTask($){
 				if ($var3 > 1 && $var3 <= 1 + @Persons) {
 					my $personID	= $var3 - 1;
 					$target			= namePerson($personID);
-					$TaskPersons[$task][$personID]++;
+					#Record reference between task and person
+					push @{ $Persons[$personID]{TaskReferences} },
+						{ id => $task,		type => 'ActionedBy'};
+					push @{ $Tasks[$task]{PersonReferences} },
+						{ id => $personID,	type => 'Actioning'};
 				}
 				$destination	= "to location of $target";
 			}
@@ -1696,19 +2120,31 @@ sub analyzeTask($){
 			if ($var2 eq 3) {
 				my $objectID	= $ObjectSitStandable[$var3];
 				$destination	= 'standing on '.nameObject($objectID);
-				$ObjectTasks[$objectID][$task]++;
+				#Record reference between task and object
+				push @{ $Objects[$objectID]{TaskReferences} },
+					{ id => $task,		type => 'ActionedBy'};
+				push @{ $Tasks[$task]{ObjectReferences} },
+					{ id => $objectID,	type => 'Actioning'};
 			}
 			# 4: Sitting on
 			if ($var2 eq 4) {
 				my $objectID	= $ObjectSitStandable[$var3];
 				$destination	= 'sitting on '.nameObject($objectID);
-				$ObjectTasks[$objectID][$task]++;
+				#Record reference between task and object
+				push @{ $Objects[$objectID]{TaskReferences} },
+					{ id => $task,		type => 'ActionedBy'};
+				push @{ $Tasks[$task]{ObjectReferences} },
+					{ id => $objectID,	type => 'Actioning'};
 			}
 			# 5: Lying on
 			if ($var2 eq 5) {
 				my $objectID	= $ObjectLieable[$var3];
 				$destination	= 'lying on '.nameObject($objectID);
-				$ObjectTasks[$objectID][$task]++;
+				#Record reference between task and object
+				push @{ $Objects[$objectID]{TaskReferences} },
+					{ id => $task,		type => 'ActionedBy'};
+				push @{ $Tasks[$task]{ObjectReferences} },
+					{ id => $objectID,	type => 'Actioning'};
 			}			
 			#Assemble the full text
 			$text	= "Move $person $destination";
@@ -1722,10 +2158,14 @@ sub analyzeTask($){
 			# 0: Referenced
 			$object			= 'referenced object'		if $var1 eq 0;
 			# 1+: Openable ObjectID
-			if ($var1 > 0 && $var1 <= @ObjectOpenable) {
-				my $objectID	= $ObjectOpenable[$var1];
+			if ($var1 > 0 && $var1 <= @ObjectStateful) {
+				my $objectID	= $ObjectStateful[$var1];
 				$object			= nameObject($objectID);
-				$ObjectTasks[$objectID][$task]++;
+				#Record reference between task and object
+				push @{ $Objects[$objectID]{TaskReferences} },
+					{ id => $task,		type => 'ActionedBy'};
+				push @{ $Tasks[$task]{ObjectReferences} },
+					{ id => $objectID,	type => 'Actioning'};
 			}
 			#State
 			my $state		= "UNKNOWN STATE $var2";
@@ -1748,7 +2188,11 @@ sub analyzeTask($){
 				my $variableID	= $var1+1;
 				$variable		= nameVariable($variableID);
 				$numeric		= 1 if $Variables[$variableID]{Type} eq 0;
-				$TaskVariables[$task][$variableID]++;
+				#Record reference between task and variable
+				push @{ $Variables[$variableID]{TaskReferences} },
+					{ id => $task,		type => 'ActionedBy'};
+				push @{ $Tasks[$task]{VariableReferences} },
+					{ id => $variableID,	type => 'Actioning'};
 			}
 			#Operator determines value
 			my $operator	= "UNKNOWN OPERATOR $var2";
@@ -1785,11 +2229,11 @@ sub analyzeTask($){
 					$value		= $expr;
 				}
 			}
-			else {	#String variable
+			else {			#String variable
 				# 0: assign
 				if ($var2 eq 0){
 					$operator	= 'to';
-					$value		= $expr;
+					$value		= "'$expr'";
 				}
 				# 1: Referenced value
 				if ($var2 eq 1){
@@ -1799,7 +2243,7 @@ sub analyzeTask($){
 				# 2: to formula
 				if ($var2 eq 2){
 					$operator	= 'to';
-					$value		= $expr;
+					$value		= "'$expr'";
 				}
 			}
 			$text		= "Change $variable $operator $value";
@@ -1819,14 +2263,18 @@ sub analyzeTask($){
 			# 1: Undo
 			$direction		= 'Undo'	if $var1 eq 1;
 			#Task
-			my $task		= "UNKNOWN TASK $var2";
+			my $executable	= "UNKNOWN TASK $var2";
 			#0+: Task ID
 			if ($var2 >= 0 && $var2 < @Tasks) {
 				my $taskID	= $var2 + 1;
-				$task		= nameTask($taskID);
-				#TODO: Add task-task reference
+				$executable	= nameTask($taskID);
+				#Record reference between task and task
+				push @{ $Tasks[$taskID]{TaskReferences} },
+					{ id => $task,		type => 'ActionedBy'};
+				push @{ $Tasks[$task]{TaskReferences} },
+					{ id => $taskID,	type => 'Actioning'};
 			}
-			$text		= "$direction $task";
+			$text		= "$direction $executable";
 		}
 		#End Game:		Ending
 		if($type eq 6){
@@ -1907,13 +2355,13 @@ sub generateXMLRooms(){
 			print $File_XML " ($Symbol_Room[$room])"	if defined $Symbol_Room[$room];
 			print $File_XML " -->";
 		}
-		{	#Attributes
-			writeXMLElementOpen('Attributes');
-			writeXMLElement('ID', 		$room);
-			writeXMLElement('Title', 	$Rooms[$room]{Title});
-			writeXMLElement('Name', 	nameRoom($room));
-			writeXMLElement('Hidden')	if $Rooms[$room]{Hidden};
-			writeXMLElementClose('Attributes');
+		{	#Properties
+			writeXMLElementOpen('Properties');
+			writeXMLElement('ID', 			$room);
+			writeXMLElement('SymbolicName', nameRoom($room));
+			writeXMLElement('PrintedName', 	$Rooms[$room]{Short});
+			writeXMLElement('Hidden')		if $Rooms[$room]{Hidden};
+			writeXMLElementClose('Properties');
 		}
 		{	#Descriptions	TODO Resources
 			writeXMLElementOpen('Descriptions');
@@ -1975,20 +2423,98 @@ sub generateXMLRooms(){
 			}
 			writeXMLElementClose('Exits');
 		}
-		{	#Relations		TODO Remake
-			my @task_relations	= ();
-			for my $task (1..$#Tasks){ push @task_relations, $task if defined $RoomTasks[$room][$task] }
-			my $relations	= @task_relations;
+		{	#Relations
+			my @rooms		= @{ $Rooms[$room]{RoomReferences} };
+			my @objects		= @{ $Rooms[$room]{ObjectReferences} };
+			my @tasks		= @{ $Rooms[$room]{TaskReferences} };
+			my @events		= @{ $Rooms[$room]{EventReferences} };
+			my @persons		= @{ $Rooms[$room]{PersonReferences} };
+			my @groups		= @{ $Rooms[$room]{GroupReferences} };
+			my @synonyms	= @{ $Rooms[$room]{SynonymReferences} };
+			my @variables	= @{ $Rooms[$room]{VariableReferences} };
+			my @alrs		= @{ $Rooms[$room]{ALRReferences} };
+			my $relations	= @rooms + @objects + @tasks + @events + @persons + @groups + @synonyms + @variables + @alrs;
 			writeXMLElementOpen('Relations')	if $relations;
-			{	#Tasks
-				writeXMLElementOpen('Tasks')		if @task_relations;
-				for my $task (@task_relations) {
-					writeXMLElementOpen('Task');
-					writeXMLElement('ID', $task);
-					writeXMLElement('Name', nameTask($task));
-					writeXMLElementClose('Task');
+			{	#Rooms
+				writeXMLElementOpen('Rooms')	if @rooms;
+				for my $i (0..$#rooms){
+					my $type	= $rooms[$i]{type};
+					my $id		= $rooms[$i]{id};
+					writeXMLElement($type, "Room$id (".nameRoom($id).")");
 				}
-				writeXMLElementClose('Tasks')		if @task_relations;
+				writeXMLElementClose('Rooms')	if @rooms;
+			}
+			{	#Objects
+				writeXMLElementOpen('Objects')	if @objects;
+				for my $i (0..$#objects){
+					my $type	= $objects[$i]{type};
+					my $id		= $objects[$i]{id};
+					writeXMLElement($type, "Object$id (".nameObject($id).")");
+				}
+				writeXMLElementClose('Objects')	if @objects;
+			}
+			{	#Tasks
+				writeXMLElementOpen('Tasks')	if @tasks;
+				for my $i (0..$#tasks){
+					my $type	= $tasks[$i]{type};
+					my $id		= $tasks[$i]{id};
+					writeXMLElement($type, "Task$id (".nameTask($id).")");
+				}
+				writeXMLElementClose('Tasks')	if @tasks;
+			}
+			{	#Events
+				writeXMLElementOpen('Events')	if @events;
+				for my $i (0..$#events){
+					my $type	= $events[$i]{type};
+					my $id		= $events[$i]{id};
+					writeXMLElement($type, "Event$id (".nameEvent($id).")");
+				}
+				writeXMLElementClose('Events')	if @events;
+			}
+			{	#Persons
+				writeXMLElementOpen('Persons')	if @persons;
+				for my $i (0..$#persons){
+					my $type	= $persons[$i]{type};
+					my $id		= $persons[$i]{id};
+					writeXMLElement($type, "Person$id (".namePerson($id).")");
+				}
+				writeXMLElementClose('Persons')	if @persons;
+			}
+			{	#Groups
+				writeXMLElementOpen('Groups')	if @groups;
+				for my $i (0..$#groups){
+					my $type	= $groups[$i]{type};
+					my $id		= $groups[$i]{id};
+					writeXMLElement($type, "Group$id (".nameGroup($id).")");
+				}
+				writeXMLElementClose('Groups')	if @groups;
+			}
+			{	#Synonyms
+				writeXMLElementOpen('Synonyms')		if @synonyms;
+				for my $i (0..$#synonyms){
+					my $type	= $synonyms[$i]{type};
+					my $id		= $synonyms[$i]{id};
+					writeXMLElement($type, "Synonym$id (".nameSynonym($id).")");
+				}
+				writeXMLElementClose('Synonyms')	if @synonyms;
+			}
+			{	#Variables
+				writeXMLElementOpen('Variables')	if @variables;
+				for my $i (0..$#variables){
+					my $type	= $variables[$i]{type};
+					my $id		= $variables[$i]{id};
+					writeXMLElement($type, "Variable$id (".nameVariable($id).")");
+				}
+				writeXMLElementClose('Variables')	if @variables;
+			}
+			{	#ALRs
+				writeXMLElementOpen('ALRs')		if @alrs;
+				for my $i (0..$#alrs){
+					my $type	= $alrs[$i]{type};
+					my $id		= $alrs[$i]{id};
+					writeXMLElement($type, "ALR$id (".nameALR($id).")");
+				}
+				writeXMLElementClose('ALRs')	if @alrs;
 			}
 			writeXMLElementClose('Relations')	if $relations;
 		}
@@ -2006,16 +2532,20 @@ sub generateXMLObjects(){
 			print $File_XML " ($Symbol_Object[$object])"	if defined $Symbol_Object[$object];
 			print $File_XML " -->";
 		}
-		{	#Attributes
-			writeXMLElementOpen('Attributes');
+		{	#Properties
+			writeXMLElementOpen('Properties');
 			writeXMLElement('ID',			$object);
+			writeXMLElement('SymbolicName',	nameObject($object));
+			writeXMLElement('ShortName',	$Objects[$object]{Short});
 			writeXMLElement('Prefix',		$Objects[$object]{Prefix});
-			writeXMLElement('Short',		$Objects[$object]{Short});
-			writeXMLElement('Name',			nameObject($object));
 			foreach my $alias ( @{$Objects[$object]{Alias} } ){
 				writeXMLElement('Alias',	$alias) unless $alias eq '';
 			}
 			writeXMLElement('Class',		$Objects[$object]{Class})		if defined $Objects[$object]{Class};
+			writeXMLElementClose('Properties');
+		}
+		{	#Attributes
+			writeXMLElementOpen('Attributes');
 			writeXMLElement('Static')		if $Objects[$object]{Static};
 			writeXMLElement('Portable')		unless $Objects[$object]{Static};
 			writeXMLElement('Container')	if $Objects[$object]{Container};
@@ -2076,25 +2606,103 @@ sub generateXMLObjects(){
 				writeXMLElementClose('Description');
 			}
 			writeXMLElementClose('Descriptions');
-			writeXMLElementClose('Object');
 		}
-		{	#Relations		TODO Remake
-			my @task_relations	= ();
-			for my $task (1..$#Tasks){ push @task_relations, $task if defined $ObjectTasks[$object][$task] }
-			my $relations	= @task_relations;
+		{	#Relations
+			my @rooms		= @{ $Objects[$object]{RoomReferences} };
+			my @objects		= @{ $Objects[$object]{ObjectReferences} };
+			my @tasks		= @{ $Objects[$object]{TaskReferences} };
+			my @events		= @{ $Objects[$object]{EventReferences} };
+			my @persons		= @{ $Objects[$object]{PersonReferences} };
+			my @groups		= @{ $Objects[$object]{GroupReferences} };
+			my @synonyms	= @{ $Objects[$object]{SynonymReferences} };
+			my @variables	= @{ $Objects[$object]{VariableReferences} };
+			my @alrs		= @{ $Objects[$object]{ALRReferences} };
+			my $relations	= @rooms + @objects + @tasks + @events + @persons + @groups + @synonyms + @variables + @alrs;
 			writeXMLElementOpen('Relations')	if $relations;
-			{	#Tasks
-				writeXMLElementOpen('Tasks')		if @task_relations;
-				for my $task (@task_relations) {
-					writeXMLElementOpen('Task');
-					writeXMLElement('ID', $task);
-					writeXMLElement('Name', nameTask($task));
-					writeXMLElementClose('Task');
+			{	#Rooms
+				writeXMLElementOpen('Rooms')	if @rooms;
+				for my $i (0..$#rooms){
+					my $type	= $rooms[$i]{type};
+					my $id		= $rooms[$i]{id};
+					writeXMLElement($type, "Room$id (".nameRoom($id).")");
 				}
-				writeXMLElementClose('Tasks')		if @task_relations;
+				writeXMLElementClose('Rooms')	if @rooms;
+			}
+			{	#Objects
+				writeXMLElementOpen('Objects')	if @objects;
+				for my $i (0..$#objects){
+					my $type	= $objects[$i]{type};
+					my $id		= $objects[$i]{id};
+					writeXMLElement($type, "Object$id (".nameObject($id).")");
+				}
+				writeXMLElementClose('Objects')	if @objects;
+			}
+			{	#Tasks
+				writeXMLElementOpen('Tasks')	if @tasks;
+				for my $i (0..$#tasks){
+					my $type	= $tasks[$i]{type};
+					my $id		= $tasks[$i]{id};
+					writeXMLElement($type, "Task$id (".nameTask($id).")");
+				}
+				writeXMLElementClose('Tasks')	if @tasks;
+			}
+			{	#Events
+				writeXMLElementOpen('Events')	if @events;
+				for my $i (0..$#events){
+					my $type	= $events[$i]{type};
+					my $id		= $events[$i]{id};
+					writeXMLElement($type, "Event$id (".nameEvent($id).")");
+				}
+				writeXMLElementClose('Events')	if @events;
+			}
+			{	#Persons
+				writeXMLElementOpen('Persons')	if @persons;
+				for my $i (0..$#persons){
+					my $type	= $persons[$i]{type};
+					my $id		= $persons[$i]{id};
+					writeXMLElement($type, "Person$id (".namePerson($id).")");
+				}
+				writeXMLElementClose('Persons')	if @persons;
+			}
+			{	#Groups
+				writeXMLElementOpen('Groups')	if @groups;
+				for my $i (0..$#groups){
+					my $type	= $groups[$i]{type};
+					my $id		= $groups[$i]{id};
+					writeXMLElement($type, "Group$id (".nameGroup($id).")");
+				}
+				writeXMLElementClose('Groups')	if @groups;
+			}
+			{	#Synonyms
+				writeXMLElementOpen('Synonyms')		if @synonyms;
+				for my $i (0..$#synonyms){
+					my $type	= $synonyms[$i]{type};
+					my $id		= $synonyms[$i]{id};
+					writeXMLElement($type, "Synonym$id (".nameSynonym($id).")");
+				}
+				writeXMLElementClose('Synonyms')	if @synonyms;
+			}
+			{	#Variables
+				writeXMLElementOpen('Variables')	if @variables;
+				for my $i (0..$#variables){
+					my $type	= $variables[$i]{type};
+					my $id		= $variables[$i]{id};
+					writeXMLElement($type, "Variable$id (".nameVariable($id).")");
+				}
+				writeXMLElementClose('Variables')	if @variables;
+			}
+			{	#ALRs
+				writeXMLElementOpen('ALRs')		if @alrs;
+				for my $i (0..$#alrs){
+					my $type	= $alrs[$i]{type};
+					my $id		= $alrs[$i]{id};
+					writeXMLElement($type, "ALR$id (".nameALR($id).")");
+				}
+				writeXMLElementClose('ALRs')	if @alrs;
 			}
 			writeXMLElementClose('Relations')	if $relations;
 		}
+		writeXMLElementClose('Object');
 	}
 	writeXMLElementClose('Objects') if $#Objects;
 }
@@ -2108,16 +2716,15 @@ sub generateXMLTasks(){
 			print $File_XML " ($Symbol_Task[$task])"	if defined $Symbol_Task[$task];
 			print $File_XML " -->";
 		}
-		{	#Attributes
-			writeXMLElementOpen('Attributes');
+		{	#Properties
+			writeXMLElementOpen('Properties');
 			writeXMLElement('ID',			$task);
-			writeXMLElement('Name',			nameTask($task));
-			writeXMLElement('Title',		$Tasks[$task]{Name});
-			writeXMLElement('Type',			$Tasks[$task]{Type});
+			writeXMLElement('SymbolicName',	nameTask($task));
+			writeXMLElement('Class',		$Tasks[$task]{Class})		if defined $Tasks[$task]{Class};
 			writeXMLElement('Repeatable')	if $Tasks[$task]{Repeatable};
 			writeXMLElement('Reversible')	if $Tasks[$task]{Reversible};
 			writeXMLElement('ShowRoomDesc',	nameRoom($Tasks[$task]{ShowRoomDesc})) unless $Tasks[$task]{ShowRoomDesc} eq 0;
-			writeXMLElementClose('Attributes');
+			writeXMLElementClose('Properties');
 		}
 		{	#Commands
 			my @commands = @{ $Tasks[$task]{Commands} };
@@ -2182,57 +2789,98 @@ sub generateXMLTasks(){
 				writeXMLElementClose('Actions');
 			}
 		}
-		{	#Relations		TODO Remake
-			my @room_relations	= ();
-			for my $room (1..$#Rooms){ push @room_relations, $room if defined $RoomTasks[$room][$task] }
-			my @object_relations	= ();
-			for my $object (1..$#Objects){ push @object_relations, $object if defined $ObjectTasks[$object][$task] }
-			my @person_relations	= ();
-			for my $person (1..$#Persons){ push @person_relations, $person if defined $TaskPersons[$task][$person] }
-			my @variable_relations	= ();
-			for my $variable (1..$#Variables){ push @variable_relations, $variable if defined $TaskVariables[$task][$variable] }
-			
-			my $relations	= @room_relations + @object_relations + @person_relations + @variable_relations;
+		{	#Relations
+			my @rooms		= @{ $Tasks[$task]{RoomReferences} };
+			my @objects		= @{ $Tasks[$task]{ObjectReferences} };
+			my @tasks		= @{ $Tasks[$task]{TaskReferences} };
+			my @events		= @{ $Tasks[$task]{EventReferences} };
+			my @persons		= @{ $Tasks[$task]{PersonReferences} };
+			my @groups		= @{ $Tasks[$task]{GroupReferences} };
+			my @synonyms	= @{ $Tasks[$task]{SynonymReferences} };
+			my @variables	= @{ $Tasks[$task]{VariableReferences} };
+			my @alrs		= @{ $Tasks[$task]{ALRReferences} };
+			my $relations	= @rooms + @objects + @tasks + @events + @persons + @groups + @synonyms + @variables + @alrs;
 			writeXMLElementOpen('Relations')	if $relations;
 			{	#Rooms
-				writeXMLElementOpen('Rooms')		if @room_relations;
-				for my $room (@room_relations) {
-					writeXMLElementOpen('Room');
-					writeXMLElement('ID', $room);
-					writeXMLElement('Name', nameRoom($room));
-					writeXMLElementClose('Room');
+				writeXMLElementOpen('Rooms')	if @rooms;
+				for my $i (0..$#rooms){
+					my $type	= $rooms[$i]{type};
+					my $id		= $rooms[$i]{id};
+					writeXMLElement($type, "Room$id (".nameRoom($id).")");
 				}
-				writeXMLElementClose('Rooms')		if @room_relations;
+				writeXMLElementClose('Rooms')	if @rooms;
 			}
 			{	#Objects
-				writeXMLElementOpen('Objects')		if @object_relations;
-				for my $object (@object_relations) {
-					writeXMLElementOpen('Object');
-					writeXMLElement('ID', $object);
-					writeXMLElement('Name', nameObject($object));
-					writeXMLElementClose('Object');
+				writeXMLElementOpen('Objects')	if @objects;
+				for my $i (0..$#objects){
+					my $type	= $objects[$i]{type};
+					my $id		= $objects[$i]{id};
+					writeXMLElement($type, "Object$id (".nameObject($id).")");
 				}
-				writeXMLElementClose('Objects')		if @object_relations;
+				writeXMLElementClose('Objects')	if @objects;
+			}
+			{	#Tasks
+				writeXMLElementOpen('Tasks')	if @tasks;
+				for my $i (0..$#tasks){
+					my $type	= $tasks[$i]{type};
+					my $id		= $tasks[$i]{id};
+					writeXMLElement($type, "Task$id (".nameTask($id).")");
+				}
+				writeXMLElementClose('Tasks')	if @tasks;
+			}
+			{	#Events
+				writeXMLElementOpen('Events')	if @events;
+				for my $i (0..$#events){
+					my $type	= $events[$i]{type};
+					my $id		= $events[$i]{id};
+					writeXMLElement($type, "Event$id (".nameEvent($id).")");
+				}
+				writeXMLElementClose('Events')	if @events;
 			}
 			{	#Persons
-				writeXMLElementOpen('Persons')		if @person_relations;
-				for my $person (@person_relations) {
-					writeXMLElementOpen('Person');
-					writeXMLElement('ID', $person);
-					writeXMLElement('Name', namePerson($person));
-					writeXMLElementClose('Person');
+				writeXMLElementOpen('Persons')	if @persons;
+				for my $i (0..$#persons){
+					my $type	= $persons[$i]{type};
+					my $id		= $persons[$i]{id};
+					writeXMLElement($type, "Person$id (".namePerson($id).")");
 				}
-				writeXMLElementClose('Persons')		if @person_relations;
+				writeXMLElementClose('Persons')	if @persons;
+			}
+			{	#Groups
+				writeXMLElementOpen('Groups')	if @groups;
+				for my $i (0..$#groups){
+					my $type	= $groups[$i]{type};
+					my $id		= $groups[$i]{id};
+					writeXMLElement($type, "Group$id (".nameGroup($id).")");
+				}
+				writeXMLElementClose('Groups')	if @groups;
+			}
+			{	#Synonyms
+				writeXMLElementOpen('Synonyms')		if @synonyms;
+				for my $i (0..$#synonyms){
+					my $type	= $synonyms[$i]{type};
+					my $id		= $synonyms[$i]{id};
+					writeXMLElement($type, "Synonym$id (".nameSynonym($id).")");
+				}
+				writeXMLElementClose('Synonyms')	if @synonyms;
 			}
 			{	#Variables
-				writeXMLElementOpen('Variables')		if @variable_relations;
-				for my $variable (@variable_relations) {
-					writeXMLElementOpen('Variable');
-					writeXMLElement('ID', $variable);
-					writeXMLElement('Name', nameVariable($variable));
-					writeXMLElementClose('Variable');
+				writeXMLElementOpen('Variables')	if @variables;
+				for my $i (0..$#variables){
+					my $type	= $variables[$i]{type};
+					my $id		= $variables[$i]{id};
+					writeXMLElement($type, "Variable$id (".nameVariable($id).")");
 				}
-				writeXMLElementClose('Variables')		if @variable_relations;
+				writeXMLElementClose('Variables')	if @variables;
+			}
+			{	#ALRs
+				writeXMLElementOpen('ALRs')		if @alrs;
+				for my $i (0..$#alrs){
+					my $type	= $alrs[$i]{type};
+					my $id		= $alrs[$i]{id};
+					writeXMLElement($type, "ALR$id (".nameALR($id).")");
+				}
+				writeXMLElementClose('ALRs')	if @alrs;
 			}
 			writeXMLElementClose('Relations')	if $relations;
 		}
@@ -2250,24 +2898,119 @@ sub generateXMLEvents(){
 			print $File_XML " ($Symbol_Event[$event])"	if defined $Symbol_Event[$event];
 			print $File_XML " -->";
 		}
-		{	#Attributes
-			writeXMLElementOpen('Attributes');
+		{	#Properties
+			writeXMLElementOpen('Properties');
 			writeXMLElement('ID',			$event);
-			writeXMLElement('Name',			nameEvent($event));
-			writeXMLElement('Title',		$Events[$event]{Short});
+			writeXMLElement('SymbolicName',	nameEvent($event));
+			writeXMLElement('ShortName',	$Events[$event]{Short});
 			writeXMLElement('Type',			$Events[$event]{StarterType});
 			writeXMLElement('Restart',		$Events[$event]{RestartType});
-			writeXMLElementClose('Attributes');
+			writeXMLElementClose('Properties');
 		}
 		#TODO
+		{	#Relations
+			my @rooms		= @{ $Events[$event]{RoomReferences} };
+			my @objects		= @{ $Events[$event]{ObjectReferences} };
+			my @tasks		= @{ $Events[$event]{TaskReferences} };
+			my @events		= @{ $Events[$event]{EventReferences} };
+			my @persons		= @{ $Events[$event]{PersonReferences} };
+			my @groups		= @{ $Events[$event]{GroupReferences} };
+			my @synonyms	= @{ $Events[$event]{SynonymReferences} };
+			my @variables	= @{ $Events[$event]{VariableReferences} };
+			my @alrs		= @{ $Events[$event]{ALRReferences} };
+			my $relations	= @rooms + @objects + @tasks + @events + @persons + @groups + @synonyms + @variables + @alrs;
+			writeXMLElementOpen('Relations')	if $relations;
+			{	#Rooms
+				writeXMLElementOpen('Rooms')	if @rooms;
+				for my $i (0..$#rooms){
+					my $type	= $rooms[$i]{type};
+					my $id		= $rooms[$i]{id};
+					writeXMLElement($type, "Room$id (".nameRoom($id).")");
+				}
+				writeXMLElementClose('Rooms')	if @rooms;
+			}
+			{	#Objects
+				writeXMLElementOpen('Objects')	if @objects;
+				for my $i (0..$#objects){
+					my $type	= $objects[$i]{type};
+					my $id		= $objects[$i]{id};
+					writeXMLElement($type, "Object$id (".nameObject($id).")");
+				}
+				writeXMLElementClose('Objects')	if @objects;
+			}
+			{	#Tasks
+				writeXMLElementOpen('Tasks')	if @tasks;
+				for my $i (0..$#tasks){
+					my $type	= $tasks[$i]{type};
+					my $id		= $tasks[$i]{id};
+					writeXMLElement($type, "Task$id (".nameTask($id).")");
+				}
+				writeXMLElementClose('Tasks')	if @tasks;
+			}
+			{	#Events
+				writeXMLElementOpen('Events')	if @events;
+				for my $i (0..$#events){
+					my $type	= $events[$i]{type};
+					my $id		= $events[$i]{id};
+					writeXMLElement($type, "Event$id (".nameEvent($id).")");
+				}
+				writeXMLElementClose('Events')	if @events;
+			}
+			{	#Persons
+				writeXMLElementOpen('Persons')	if @persons;
+				for my $i (0..$#persons){
+					my $type	= $persons[$i]{type};
+					my $id		= $persons[$i]{id};
+					writeXMLElement($type, "Person$id (".namePerson($id).")");
+				}
+				writeXMLElementClose('Persons')	if @persons;
+			}
+			{	#Groups
+				writeXMLElementOpen('Groups')	if @groups;
+				for my $i (0..$#groups){
+					my $type	= $groups[$i]{type};
+					my $id		= $groups[$i]{id};
+					writeXMLElement($type, "Group$id (".nameGroup($id).")");
+				}
+				writeXMLElementClose('Groups')	if @groups;
+			}
+			{	#Synonyms
+				writeXMLElementOpen('Synonyms')		if @synonyms;
+				for my $i (0..$#synonyms){
+					my $type	= $synonyms[$i]{type};
+					my $id		= $synonyms[$i]{id};
+					writeXMLElement($type, "Synonym$id (".nameSynonym($id).")");
+				}
+				writeXMLElementClose('Synonyms')	if @synonyms;
+			}
+			{	#Variables
+				writeXMLElementOpen('Variables')	if @variables;
+				for my $i (0..$#variables){
+					my $type	= $variables[$i]{type};
+					my $id		= $variables[$i]{id};
+					writeXMLElement($type, "Variable$id (".nameVariable($id).")");
+				}
+				writeXMLElementClose('Variables')	if @variables;
+			}
+			{	#ALRs
+				writeXMLElementOpen('ALRs')		if @alrs;
+				for my $i (0..$#alrs){
+					my $type	= $alrs[$i]{type};
+					my $id		= $alrs[$i]{id};
+					writeXMLElement($type, "ALR$id (".nameALR($id).")");
+				}
+				writeXMLElementClose('ALRs')	if @alrs;
+			}
+			writeXMLElementClose('Relations')	if $relations;
+		}
 		writeXMLElementClose('Event');
 	}
 	writeXMLElementClose('Events') if $#Events;
 }
 sub generateXMLPersons(){
 	print $File_XML "\n<!-- $#Persons non-player persons -->";
-	#TODO: Add the player
 	writeXMLElementOpen('Persons') if $#Persons;
+	#TODO: Add the player
 	for my $person (1 .. $#Persons){
 		writeXMLElementOpen('Person');
 		if ($Option_Verbose){	#Verbose ID and name
@@ -2275,21 +3018,26 @@ sub generateXMLPersons(){
 			print $File_XML " ($Symbol_Person[$person])"	if defined $Symbol_Person[$person];
 			print $File_XML " -->";
 		}
-		{	#Attributes
-			writeXMLElementOpen('Attributes');
+		{	#Properties
+			writeXMLElementOpen('Properties');
 			writeXMLElement('ID',			$person);
-			writeXMLElement('Title',		$Persons[$person]{Name});
-			writeXMLElement('Name',			namePerson($person));
+			writeXMLElement('SymbolicName',	namePerson($person));
+			writeXMLElement('PrintedName',	$Persons[$person]{Name});
+			writeXMLElement('Prefix',		$Persons[$person]{Prefix});
 			foreach my $alias ( @{$Persons[$person]{Alias} } ){
 				writeXMLElement('Alias',	$alias) unless $alias eq '';
 			}
 			writeXMLElement('Gender',		nameGender($Persons[$person]{Gender}));
+			writeXMLElementClose('Properties');
+		}
+		{	#Location
+			writeXMLElementOpen('Location');
 			writeXMLElement('RoomID',		$Persons[$person]{StartRoom});
 			writeXMLElement('Room',			nameRoom($Persons[$person]{StartRoom}));
 			writeXMLElement('Presence',		$Persons[$person]{InRoomText});
 			writeXMLElement('Entering',		$Persons[$person]{EnterText});
 			writeXMLElement('Leaving',		$Persons[$person]{ExitText});
-			writeXMLElementClose('Attributes');
+			writeXMLElementClose('Location');
 		}
 		#TODO: BattleStats
 		{	#Descriptions	TODO Resource
@@ -2320,20 +3068,98 @@ sub generateXMLPersons(){
 			writeXMLElementClose('Topics');
 		}
 		#TODO: Walks
-		{	#Relations		TODO Remake
-			my @task_relations	= ();
-			for my $task (1..$#Tasks){ push @task_relations, $task if defined $TaskPersons[$task][$person] }
-			my $relations	= @task_relations;
+		{	#Relations
+			my @rooms		= @{ $Persons[$person]{RoomReferences} };
+			my @objects		= @{ $Persons[$person]{ObjectReferences} };
+			my @tasks		= @{ $Persons[$person]{TaskReferences} };
+			my @events		= @{ $Persons[$person]{EventReferences} };
+			my @persons		= @{ $Persons[$person]{PersonReferences} };
+			my @groups		= @{ $Persons[$person]{GroupReferences} };
+			my @synonyms	= @{ $Persons[$person]{SynonymReferences} };
+			my @variables	= @{ $Persons[$person]{VariableReferences} };
+			my @alrs		= @{ $Persons[$person]{ALRReferences} };
+			my $relations	= @rooms + @objects + @tasks + @events + @persons + @groups + @synonyms + @variables + @alrs;
 			writeXMLElementOpen('Relations')	if $relations;
-			{	#Tasks
-				writeXMLElementOpen('Tasks')		if @task_relations;
-				for my $task (@task_relations) {
-					writeXMLElementOpen('Task');
-					writeXMLElement('ID', $task);
-					writeXMLElement('Name', nameTask($task));
-					writeXMLElementClose('Task');
+			{	#Rooms
+				writeXMLElementOpen('Rooms')	if @rooms;
+				for my $i (0..$#rooms){
+					my $type	= $rooms[$i]{type};
+					my $id		= $rooms[$i]{id};
+					writeXMLElement($type, "Room$id (".nameRoom($id).")");
 				}
-				writeXMLElementClose('Tasks')		if @task_relations;
+				writeXMLElementClose('Rooms')	if @rooms;
+			}
+			{	#Objects
+				writeXMLElementOpen('Objects')	if @objects;
+				for my $i (0..$#objects){
+					my $type	= $objects[$i]{type};
+					my $id		= $objects[$i]{id};
+					writeXMLElement($type, "Object$id (".nameObject($id).")");
+				}
+				writeXMLElementClose('Objects')	if @objects;
+			}
+			{	#Tasks
+				writeXMLElementOpen('Tasks')	if @tasks;
+				for my $i (0..$#tasks){
+					my $type	= $tasks[$i]{type};
+					my $id		= $tasks[$i]{id};
+					writeXMLElement($type, "Task$id (".nameTask($id).")");
+				}
+				writeXMLElementClose('Tasks')	if @tasks;
+			}
+			{	#Events
+				writeXMLElementOpen('Events')	if @events;
+				for my $i (0..$#events){
+					my $type	= $events[$i]{type};
+					my $id		= $events[$i]{id};
+					writeXMLElement($type, "Event$id (".nameEvent($id).")");
+				}
+				writeXMLElementClose('Events')	if @events;
+			}
+			{	#Persons
+				writeXMLElementOpen('Persons')	if @persons;
+				for my $i (0..$#persons){
+					my $type	= $persons[$i]{type};
+					my $id		= $persons[$i]{id};
+					writeXMLElement($type, "Person$id (".namePerson($id).")");
+				}
+				writeXMLElementClose('Persons')	if @persons;
+			}
+			{	#Groups
+				writeXMLElementOpen('Groups')	if @groups;
+				for my $i (0..$#groups){
+					my $type	= $groups[$i]{type};
+					my $id		= $groups[$i]{id};
+					writeXMLElement($type, "Group$id (".nameGroup($id).")");
+				}
+				writeXMLElementClose('Groups')	if @groups;
+			}
+			{	#Synonyms
+				writeXMLElementOpen('Synonyms')		if @synonyms;
+				for my $i (0..$#synonyms){
+					my $type	= $synonyms[$i]{type};
+					my $id		= $synonyms[$i]{id};
+					writeXMLElement($type, "Synonym$id (".nameSynonym($id).")");
+				}
+				writeXMLElementClose('Synonyms')	if @synonyms;
+			}
+			{	#Variables
+				writeXMLElementOpen('Variables')	if @variables;
+				for my $i (0..$#variables){
+					my $type	= $variables[$i]{type};
+					my $id		= $variables[$i]{id};
+					writeXMLElement($type, "Variable$id (".nameVariable($id).")");
+				}
+				writeXMLElementClose('Variables')	if @variables;
+			}
+			{	#ALRs
+				writeXMLElementOpen('ALRs')		if @alrs;
+				for my $i (0..$#alrs){
+					my $type	= $alrs[$i]{type};
+					my $id		= $alrs[$i]{id};
+					writeXMLElement($type, "ALR$id (".nameALR($id).")");
+				}
+				writeXMLElementClose('ALRs')	if @alrs;
 			}
 			writeXMLElementClose('Relations')	if $relations;
 		}
@@ -2351,28 +3177,107 @@ sub generateXMLVariables(){
 			print $File_XML " ($Symbol_Variable[$variable])"	if defined $Symbol_Variable[$variable];
 			print $File_XML " -->";
 		}
-		{	#Attributes
-			writeXMLElementOpen('Attributes');
+		{	#Properties
+			writeXMLElementOpen('Properties');
 			writeXMLElement('ID',			$variable);
-			writeXMLElement('Name',			$Variables[$variable]{Name});
+			writeXMLElement('SymbolicName',	nameVariable($variable));
+			writeXMLElement('PrintedName',	$Variables[$variable]{Name});
 			writeXMLElement('Type',			$Variables[$variable]{Type});
 			writeXMLElement('Value',		$Variables[$variable]{Value});
-			writeXMLElementClose('Attributes');
+			writeXMLElementClose('Properties');
 		}
 		{	#Relations
-			my @task_relations	= ();
-			for my $task (1..$#Tasks){ push @task_relations, $task if defined $TaskVariables[$task][$variable] }
-			my $relations	= @task_relations;
+			my @rooms		= @{ $Variables[$variable]{RoomReferences} };
+			my @objects		= @{ $Variables[$variable]{ObjectReferences} };
+			my @tasks		= @{ $Variables[$variable]{TaskReferences} };
+			my @events		= @{ $Variables[$variable]{EventReferences} };
+			my @persons		= @{ $Variables[$variable]{PersonReferences} };
+			my @groups		= @{ $Variables[$variable]{GroupReferences} };
+			my @synonyms	= @{ $Variables[$variable]{SynonymReferences} };
+			my @variables	= @{ $Variables[$variable]{VariableReferences} };
+			my @alrs		= @{ $Variables[$variable]{ALRReferences} };
+			my $relations	= @rooms + @objects + @tasks + @events + @persons + @groups + @synonyms + @variables + @alrs;
 			writeXMLElementOpen('Relations')	if $relations;
-			{	#Tasks
-				writeXMLElementOpen('Tasks')		if @task_relations;
-				for my $task (@task_relations) {
-					writeXMLElementOpen('Task');
-					writeXMLElement('ID', $task);
-					writeXMLElement('Name', nameTask($task));
-					writeXMLElementClose('Task');
+			{	#Rooms
+				writeXMLElementOpen('Rooms')	if @rooms;
+				for my $i (0..$#rooms){
+					my $type	= $rooms[$i]{type};
+					my $id		= $rooms[$i]{id};
+					writeXMLElement($type, "Room$id (".nameRoom($id).")");
 				}
-				writeXMLElementClose('Tasks')		if @task_relations;
+				writeXMLElementClose('Rooms')	if @rooms;
+			}
+			{	#Objects
+				writeXMLElementOpen('Objects')	if @objects;
+				for my $i (0..$#objects){
+					my $type	= $objects[$i]{type};
+					my $id		= $objects[$i]{id};
+					writeXMLElement($type, "Object$id (".nameObject($id).")");
+				}
+				writeXMLElementClose('Objects')	if @objects;
+			}
+			{	#Tasks
+				writeXMLElementOpen('Tasks')	if @tasks;
+				for my $i (0..$#tasks){
+					my $type	= $tasks[$i]{type};
+					my $id		= $tasks[$i]{id};
+					writeXMLElement($type, "Task$id (".nameTask($id).")");
+				}
+				writeXMLElementClose('Tasks')	if @tasks;
+			}
+			{	#Events
+				writeXMLElementOpen('Events')	if @events;
+				for my $i (0..$#events){
+					my $type	= $events[$i]{type};
+					my $id		= $events[$i]{id};
+					writeXMLElement($type, "Event$id (".nameEvent($id).")");
+				}
+				writeXMLElementClose('Events')	if @events;
+			}
+			{	#Persons
+				writeXMLElementOpen('Persons')	if @persons;
+				for my $i (0..$#persons){
+					my $type	= $persons[$i]{type};
+					my $id		= $persons[$i]{id};
+					writeXMLElement($type, "Person$id (".namePerson($id).")");
+				}
+				writeXMLElementClose('Persons')	if @persons;
+			}
+			{	#Groups
+				writeXMLElementOpen('Groups')	if @groups;
+				for my $i (0..$#groups){
+					my $type	= $groups[$i]{type};
+					my $id		= $groups[$i]{id};
+					writeXMLElement($type, "Group$id (".nameGroup($id).")");
+				}
+				writeXMLElementClose('Groups')	if @groups;
+			}
+			{	#Synonyms
+				writeXMLElementOpen('Synonyms')		if @synonyms;
+				for my $i (0..$#synonyms){
+					my $type	= $synonyms[$i]{type};
+					my $id		= $synonyms[$i]{id};
+					writeXMLElement($type, "Synonym$id (".nameSynonym($id).")");
+				}
+				writeXMLElementClose('Synonyms')	if @synonyms;
+			}
+			{	#Variables
+				writeXMLElementOpen('Variables')	if @variables;
+				for my $i (0..$#variables){
+					my $type	= $variables[$i]{type};
+					my $id		= $variables[$i]{id};
+					writeXMLElement($type, "Variable$id (".nameVariable($id).")");
+				}
+				writeXMLElementClose('Variables')	if @variables;
+			}
+			{	#ALRs
+				writeXMLElementOpen('ALRs')		if @alrs;
+				for my $i (0..$#alrs){
+					my $type	= $alrs[$i]{type};
+					my $id		= $alrs[$i]{id};
+					writeXMLElement($type, "ALR$id (".nameALR($id).")");
+				}
+				writeXMLElementClose('ALRs')	if @alrs;
 			}
 			writeXMLElementClose('Relations')	if $relations;
 		}
@@ -2381,6 +3286,17 @@ sub generateXMLVariables(){
 	writeXMLElementClose('Variables');
 }
 ##Utility
+sub debugDump($;$) {
+	my $block	= shift;
+	my $id		= shift;
+	my $size	= length $block;
+	print $File_Log "Debug dump for $id\n"	if defined $id;
+	for my $i (1..$size){
+		my $value	= ord substr($block, $i-1, 1);
+		my $line	= sprintf('%08d: %03d (0x%2$02x) %2$c', $i, $value);
+		print $File_Log "\t$line\n"
+	}
+}
 #Symbolic Name Lookups
 sub nameRoom($){
 	my $id	= shift;
@@ -2482,7 +3398,6 @@ sub writeXMLElementClose($;$){
 	print $File_XML "</$element>";
 	$File_XML_Indent--;
 }
-
 ##Main Program Loop
 initialize();		# Parse command line arguments for options and filename
 print "Preparing to read $FileName_Compiled\n";
@@ -2494,6 +3409,7 @@ loadSymbols();		# Parse the translation mapping file
 print "Parsing...\n";
 parse();			# Parse the compiled file into memory structure
 print "Analyzing...\n";
+generateSymbols();	# Generate (and print) symbol names
 analyze();			# Deeper analysis that depends on the entire story being parsed
 print "Generating output...\n";
 generate();			# Generate output and close the files
