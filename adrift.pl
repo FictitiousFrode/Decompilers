@@ -275,10 +275,11 @@ sub determineVersion(){	# Determine container version by reading the story heade
 	$Terminator		= chr( 42).chr( 42)	if $Container_Version eq '3.90' or $Container_Version eq '3.80';
 }
 sub loadConstants(){	# Initialize constants that might depend on version
-	#Null-values
-	$Symbol_Room[0]		= 'nowhere';
-	$Symbol_Object[0]	= 'nothing';
-	$Symbol_Person[0]	= 'player';
+	{	#Null-values
+		$Symbol_Room[0]		= 'nowhere';
+		$Symbol_Object[0]	= 'nothing';
+		$Symbol_Person[0]	= 'player';
+	}
 	{	#Compass directions; dependant on the ExpandedCompass global
 		$Symbol_Compass_Direction[0]	= 'North';
 		$Symbol_Compass_Direction[1]	= 'East';
@@ -308,8 +309,9 @@ sub loadConstants(){	# Initialize constants that might depend on version
 		$Symbol_Compass_Reversed[11]	= 'southeast of'	if $Story{ExpandedCompass};
 	}
 	{	#Gender names
-		$Symbol_Gender[0]	= 'man';
-		$Symbol_Gender[1]	= 'woman';
+		$Symbol_Gender[0]	= 'male';
+		$Symbol_Gender[1]	= 'female';
+		$Symbol_Gender[2]	= 'neuter';
 	}
 }
 sub loadSymbols(){		# Read symbol mapping translation from given file
@@ -1498,40 +1500,44 @@ sub analyze(){
 	#Analyze tasks
 	print $File_Log "Analyzing tasks:\n";
 	for my $task (1 .. $#Tasks){ analyzeTask($task) }
-	#TODO: Analyze events
+	#Analyze events
+	print $File_Log "Analyzing events:\n";
+	for my $event (1 .. $#Events){ analyzeEvent($event) }
 	#TODO: Analyze persons
 	#TODO: Analyze room groups
 	#TODO: Analyze synonyms
 	#TODO: Analyze variables
 	#TODO: Analyze ALRs
 	#Mapping tables
-	print $File_Log "Static Object IDs:\n";
-	for my $id (1 .. $#ObjectStatic){
-		print $File_Log "\t$id -> $ObjectStatic[$id] (".nameObject($ObjectStatic[$id]).")\n";
-	}
-	print $File_Log "Portable Object IDs:\n";
-	for my $id (1 .. $#ObjectPortable){
-		print $File_Log "\t$id -> $ObjectPortable[$id] (".nameObject($ObjectPortable[$id]).")\n";
-	}
-	print $File_Log "Openable Object IDs:\n";
-	for my $id (1 .. $#ObjectOpenable){
-		print $File_Log "\t$id -> $ObjectOpenable[$id] (".nameObject($ObjectOpenable[$id]).")\n";
-	}
-	print $File_Log "Stateful Object IDs:\n";
-	for my $id (1 .. $#ObjectStateful){
-		print $File_Log "\t$id -> $ObjectStateful[$id] (".nameObject($ObjectStateful[$id]).")\n";
-	}
-	print $File_Log "Holder Object IDs:\n";
-	for my $id (1 .. $#ObjectHolder){
-		print $File_Log "\t$id -> $ObjectHolder[$id] (".nameObject($ObjectHolder[$id]).")\n";
-	}
-	print $File_Log "Container Object IDs:\n";
-	for my $id (1 .. $#ObjectContainer){
-		print $File_Log "\t$id -> $ObjectContainer[$id] (".nameObject($ObjectContainer[$id]).")\n";
-	}
-	print $File_Log "Supporter Object IDs:\n";
-	for my $id (1 .. $#ObjectSurface){
-		print $File_Log "\t$id -> $ObjectSurface[$id] (".nameObject($ObjectSurface[$id]).")\n";
+	if ($Option_Verbose){
+		print $File_Log "Static Object IDs:\n";
+		for my $id (1 .. $#ObjectStatic){
+			print $File_Log "\t$id -> $ObjectStatic[$id] (".nameObject($ObjectStatic[$id]).")\n";
+		}
+		print $File_Log "Portable Object IDs:\n";
+		for my $id (1 .. $#ObjectPortable){
+			print $File_Log "\t$id -> $ObjectPortable[$id] (".nameObject($ObjectPortable[$id]).")\n";
+		}
+		print $File_Log "Openable Object IDs:\n";
+		for my $id (1 .. $#ObjectOpenable){
+			print $File_Log "\t$id -> $ObjectOpenable[$id] (".nameObject($ObjectOpenable[$id]).")\n";
+		}
+		print $File_Log "Stateful Object IDs:\n";
+		for my $id (1 .. $#ObjectStateful){
+			print $File_Log "\t$id -> $ObjectStateful[$id] (".nameObject($ObjectStateful[$id]).")\n";
+		}
+		print $File_Log "Holder Object IDs:\n";
+		for my $id (1 .. $#ObjectHolder){
+			print $File_Log "\t$id -> $ObjectHolder[$id] (".nameObject($ObjectHolder[$id]).")\n";
+		}
+		print $File_Log "Container Object IDs:\n";
+		for my $id (1 .. $#ObjectContainer){
+			print $File_Log "\t$id -> $ObjectContainer[$id] (".nameObject($ObjectContainer[$id]).")\n";
+		}
+		print $File_Log "Supporter Object IDs:\n";
+		for my $id (1 .. $#ObjectSurface){
+			print $File_Log "\t$id -> $ObjectSurface[$id] (".nameObject($ObjectSurface[$id]).")\n";
+		}
 	}
 }
 sub analyzeRoom($){
@@ -2312,7 +2318,285 @@ sub analyzeTask($){
 	#TODO Classify task by interpreting task name or commands
 }	
 sub analyzeEvent($){
-
+	my $event			= shift;
+	{	#Start Condition
+		my $type	= $Events[$event]{StarterType};
+		my $start		= "UNKNOWN EVENT START $type";
+		# 1: Immediate
+		if ($type eq 1){
+			$start		= 'immediately';
+		}
+		# 2: Timed
+		if ($type eq 2){
+			my $lower	= $Events[$event]{StartTime};
+			my $upper	= $Events[$event]{EndTime};
+			$start		= "after $lower to $upper turns";
+			$start		= "after $lower turns"	if $lower eq $upper;
+		}
+		# 3: Triggered by task
+		if ($type eq 3){
+			my $taskID	= $Events[$event]{TaskNum};
+			my $trigger	= "UNKNOWN TRIGGER $taskID";
+			# 0: Any task
+			$trigger	= 'any task'	if $taskID eq 0;
+			# 1+: Task ID
+			if (0 < $taskID && $taskID <= @Tasks) {
+				$trigger	= nameTask($taskID);
+				#Record reference between event and task
+				push @{ $Events[$event]{TaskReferences} }, 
+					{ id => $taskID,	type => 'TriggeredBy'};
+				push @{ $Tasks[$taskID]{EventReferences} },
+					{ id => $event,		type => 'Triggering'};
+			}
+			#Assemble and log warning
+			$start	= "when $trigger is performed";
+			print $File_Log "WARNING\tEvent$event\tTaskNum=$taskID unhandled (Start)\n" unless 0 <= $taskID && $taskID <= @Tasks;
+		}
+		#Store and log warning
+		$Events[$event]{Start}	= $start;
+		print $File_Log "WARNING\tEvent$event\tStarterType=$type unhandled (Start)\n" unless 1 <= $type && $type <= 3;
+	}
+	{	#Duration
+		my $lower	= $Events[$event]{Time1};
+		my $upper	= $Events[$event]{Time2};
+		my $duration;
+		$duration	= "lasts $lower to $upper turns";
+		$duration	= "lasts $lower turns"	if $lower eq $upper;
+		#Store
+		$Events[$event]{Duration}	= $duration;
+	}
+	{	#Restart
+		my $type	= $Events[$event]{RestartType};
+		my $restart	= "UNKNOWN RESTART $type";
+		# 0: No restart
+		$restart	= 'final'		if $type eq 0;
+		# 1: Immediate restart, looping
+		$restart	= 'looping'		if $type eq 1;
+		# 2: Conditional
+		$restart	= 'recurring'	if $type eq 2;
+		#Store and log warning
+		$Events[$event]{Type}		= $restart;
+		print $File_Log "WARNING\tEvent$event\tRestartType=$type unhandled (Restart)\n" unless 0 <= $type && $type <= 2;
+	}
+	{	#Pause
+		my $pause;
+		my $taskID		= $Events[$event]{PauseTask};
+		my $trigger		= "UNKNOWN PAUSE $taskID";
+		# 0: No pause
+		last if $taskID eq 0;
+		# 1+: Task ID
+		if (0 < $taskID && $taskID <= @Tasks) {
+			$trigger	= nameTask($taskID);
+			#Record reference between event and task
+			push @{ $Events[$event]{TaskReferences} }, 
+				{ id => $taskID,	type => 'PausedBy'};
+			push @{ $Tasks[$taskID]{EventReferences} },
+				{ id => $event,		type => 'Pausing'};
+		}
+		my $condition	= $Events[$event]{PauserCompleted};
+		# 0: Task completed
+		$pause		= "when $trigger is completed"	if $condition eq 0;
+		#Store and log warning
+		$Events[$event]{Pause}		= $pause;
+		print $File_Log "WARNING\tEvent$event\tPauseTask=$taskID unhandled\n" unless 0 <= $taskID && $taskID <= @Tasks;
+		print $File_Log "WARNING\tEvent$event\tPauserCompleted=$condition unhandled\n" unless 0 <= $condition && $condition <= 0;
+	}
+	{	#Resume
+		my $resume;
+		my $taskID		= $Events[$event]{ResumeTask};
+		my $trigger		= "UNKNOWN PAUSE $taskID";
+		# 0: No resume
+		last if $taskID eq 0;
+		# 1+: Task ID
+		if (0 < $taskID && $taskID <= @Tasks) {
+			$trigger	= nameTask($taskID);
+			#Record reference between event and task
+			push @{ $Events[$event]{TaskReferences} }, 
+				{ id => $taskID,	type => 'ResumedBy'};
+			push @{ $Tasks[$taskID]{EventReferences} },
+				{ id => $event,		type => 'Resuming'};
+		}
+		my $condition	= $Events[$event]{ResumerCompleted};
+		# 0: Task completed
+		$resume		= "when $trigger is completed"	if $condition eq 0;
+		#Store and log warning
+		$Events[$event]{Resume}		= $resume;
+		print $File_Log "WARNING\tEvent$event\tResumeTask=$taskID unhandled\n" unless 0 <= $taskID && $taskID <= @Tasks;
+		print $File_Log "WARNING\tEvent$event\tResumerCompleted=$condition unhandled\n" unless 0 <= $condition && $condition <= 0;
+	}
+	{	#Midpoints
+		my $turn1		= $Events[$event]{PrefTime1};
+		my $turn2		= $Events[$event]{PrefTime2};
+		#Store
+		$Events[$event]{Midpoint1}		= "$turn1 turns before ending"	if $turn1;
+		$Events[$event]{Midpoint2}		= "$turn2 turns before ending"	if $turn2;
+	}
+	{	#Start Effect
+		#Object:
+		my $objectID		= $Events[$event]{Obj1};
+		my $object			= "UNKNOWN OBJECT $objectID";
+		# 0: nothing
+		last if $objectID eq 0;
+		# 1+: Object
+		if (0 < $objectID && $objectID <= @Objects){
+			$object				= nameObject($objectID);
+			#Record reference between event and object
+			push @{ $Objects[$objectID]{EventReferences} },
+				{ id => $event,		type => 'MovedBy'};
+			push @{ $Events[$event]{ObjectReferences} },
+				{ id => $objectID,	type => 'Moving'};
+		}
+		#Destination:
+		my $destinationID	= $Events[$event]{Obj1Dest};
+		my $destination		= "UNKNOWN DESTINATION $destinationID";
+		# 0: Nowhere
+		$destination		= 'nowhere'				if $destinationID eq 0;
+		# 1: Player
+		$destination		= 'the player'			if $destinationID eq 1;
+		# 2: Location of player
+		$destination		= 'location of player'	if $destinationID eq 2;
+		# 3+: Room
+		if (2 < $destinationID && $destinationID <= @Rooms+2){
+			my $roomID		= $destinationID - 2;
+			$destination	= nameRoom($roomID);
+			#Record reference between event and Room
+			push @{ $Rooms[$roomID]{EventReferences} },
+				{ id => $event,		type => 'TargetedBy'};
+			push @{ $Events[$event]{RoomReferences} },
+				{ id => $roomID,	type => 'Targeting'};
+		}
+		# X+: RoomGroup
+		if (@Rooms+2 < $destinationID && $destinationID <= @Groups+@Rooms+2){
+			my $groupID		= $destinationID - @Rooms - 2;
+			$destination	= nameGroup($groupID);
+			#Record reference between event and Room
+			push @{ $Groups[$groupID]{EventReferences} },
+				{ id => $event,		type => 'TargetedBy'};
+			push @{ $Events[$event]{GroupReferences} },
+				{ id => $groupID,	type => 'Targeting'};
+		}
+		#Store and log warning
+		$Events[$event]{StartEffect}		= "move $object to $destination";
+		print $File_Log "WARNING\tEvent$event\tObj1=$objectID unhandled\n" unless 0 <= $objectID && $objectID <= @Objects;
+		print $File_Log "WARNING\tEvent$event\tObj1Dest=$destinationID unhandled\n" unless 0 <= $destinationID && $destinationID <= @Groups+@Rooms+2;
+	}
+	{	#End Effect 1
+		#Object:
+		my $objectID		= $Events[$event]{Obj2};
+		my $object			= "UNKNOWN OBJECT $objectID";
+		# 0: nothing
+		last if $objectID eq 0;
+		# 1+: Object
+		if (0 < $objectID && $objectID <= @Objects){
+			$object				= nameObject($objectID);
+			#Record reference between event and object
+			push @{ $Objects[$objectID]{EventReferences} },
+				{ id => $event,		type => 'MovedBy'};
+			push @{ $Events[$event]{ObjectReferences} },
+				{ id => $objectID,	type => 'Moving'};
+		}
+		#Destination:
+		my $destinationID	= $Events[$event]{Obj2Dest};
+		my $destination		= "UNKNOWN DESTINATION $destinationID";
+		# 0: Nowhere
+		$destination		= 'nowhere'				if $destinationID eq 0;
+		# 1: Player
+		$destination		= 'the player'			if $destinationID eq 1;
+		# 2: Location of player
+		$destination		= 'location of player'	if $destinationID eq 2;
+		# 3+: Room
+		if (2 < $destinationID && $destinationID <= @Rooms+2){
+			my $roomID		= $destinationID - 2;
+			$destination	= nameRoom($roomID);
+			#Record reference between event and Room
+			push @{ $Rooms[$roomID]{EventReferences} },
+				{ id => $event,		type => 'TargetedBy'};
+			push @{ $Events[$event]{RoomReferences} },
+				{ id => $roomID,	type => 'Targeting'};
+		}
+		# X+: RoomGroup
+		if (@Rooms+2 < $destinationID && $destinationID <= @Groups+@Rooms+2){
+			my $groupID		= $destinationID - @Rooms - 2;
+			$destination	= nameGroup($groupID);
+			#Record reference between event and Room
+			push @{ $Groups[$groupID]{EventReferences} },
+				{ id => $event,		type => 'TargetedBy'};
+			push @{ $Events[$event]{GroupReferences} },
+				{ id => $groupID,	type => 'Targeting'};
+		}
+		#Store and log warning
+		$Events[$event]{EndEffect1}		= "move $object to $destination";
+		print $File_Log "WARNING\tEvent$event\tObj2=$objectID unhandled\n" unless 0 <= $objectID && $objectID <= @Objects;
+		print $File_Log "WARNING\tEvent$event\tObj2Dest=$destinationID unhandled\n" unless 0 <= $destinationID && $destinationID <= @Groups+@Rooms+2;
+	}
+	{	#End Effect 2
+		#Object:
+		my $objectID		= $Events[$event]{Obj3};
+		my $object			= "UNKNOWN OBJECT $objectID";
+		# 0: nothing
+		last if $objectID eq 0;
+		# 1+: Object
+		if (0 < $objectID && $objectID <= @Objects){
+			$object				= nameObject($objectID);
+			#Record reference between event and object
+			push @{ $Objects[$objectID]{EventReferences} },
+				{ id => $event,		type => 'MovedBy'};
+			push @{ $Events[$event]{ObjectReferences} },
+				{ id => $objectID,	type => 'Moving'};
+		}
+		#Destination:
+		my $destinationID	= $Events[$event]{Obj3Dest};
+		my $destination		= "UNKNOWN DESTINATION $destinationID";
+		# 0: Nowhere
+		$destination		= 'nowhere'				if $destinationID eq 0;
+		# 1: Player
+		$destination		= 'the player'			if $destinationID eq 1;
+		# 2: Location of player
+		$destination		= 'location of player'	if $destinationID eq 2;
+		# 3+: Room
+		if (2 < $destinationID && $destinationID <= @Rooms+2){
+			my $roomID		= $destinationID - 2;
+			$destination	= nameRoom($roomID);
+			#Record reference between event and Room
+			push @{ $Rooms[$roomID]{EventReferences} },
+				{ id => $event,		type => 'TargetedBy'};
+			push @{ $Events[$event]{RoomReferences} },
+				{ id => $roomID,	type => 'Targeting'};
+		}
+		# X+: RoomGroup
+		if (@Rooms+2 < $destinationID && $destinationID <= @Groups+@Rooms+2){
+			my $groupID		= $destinationID - @Rooms - 2;
+			$destination	= nameGroup($groupID);
+			#Record reference between event and Room
+			push @{ $Groups[$groupID]{EventReferences} },
+				{ id => $event,		type => 'TargetedBy'};
+			push @{ $Events[$event]{GroupReferences} },
+				{ id => $groupID,	type => 'Targeting'};
+		}
+		#Store and log warning
+		$Events[$event]{EndEffect1}		= "move $object to $destination";
+		print $File_Log "WARNING\tEvent$event\tObj3=$objectID unhandled\n" unless 0 <= $objectID && $objectID <= @Objects;
+		print $File_Log "WARNING\tEvent$event\tObj3Dest=$destinationID unhandled\n" unless 0 <= $destinationID && $destinationID <= @Groups+@Rooms+2;
+	}
+	{	#End Execute
+		my $taskID	= $Events[$event]{TaskAffected};
+		my $execute	= "UNKNOWN EXECUTE $taskID";
+		# 0: No task
+		last if $taskID eq 0;
+		# 1+: Task ID
+		if (0 < $taskID && $taskID <= @Tasks) {
+			$execute	= nameTask($taskID);
+			#Record reference between event and task
+			push @{ $Events[$event]{TaskReferences} }, 
+				{ id => $taskID,	type => 'Triggering'};
+			push @{ $Tasks[$taskID]{EventReferences} },
+				{ id => $event,		type => 'TriggeredBy'};
+		}
+		#Store and log warning
+		$Events[$event]{EndExecute}	= $execute;
+		print $File_Log "WARNING\tEvent$event\tTaskAffected=$taskID unhandled\n" unless 0 <= $taskID && $taskID <= @Tasks;
+	}
+	#TODO: Analyze texts for references to variables and ALRs
 }
 ##Generate output
 sub generate(){
@@ -2913,52 +3197,35 @@ sub generateXMLEvents(){
 			writeXMLElement('ID',			$event);
 			writeXMLElement('SymbolicName',	nameEvent($event));
 			writeXMLElement('ShortName',	$Events[$event]{Short});
-			writeXMLElement('Type',			$Events[$event]{StarterType});
-			writeXMLElement('Restart',		$Events[$event]{RestartType});
+			writeXMLElement('Type',			$Events[$event]{Restart});
 			writeXMLElementClose('Properties');
 		}
-		{	#Timing
-			writeXMLElementOpen('Timing');
-			writeXMLElement('TriggerType',	$Events[$event]{TaskFinished});
-			writeXMLElement('TriggerID',	"Task$Events[$event]{TaskNum}")		if defined $Events[$event]{TaskNum};
-			writeXMLElement('Trigger',		nameTask($Events[$event]{TaskNum}))	if defined $Events[$event]{TaskNum};
-			writeXMLElement('Start',		$Events[$event]{StartTime})			if defined $Events[$event]{StartTime};
-			writeXMLElement('End',			$Events[$event]{EndTime})			if defined $Events[$event]{EndTime};
-			writeXMLElement('PauseType',	$Events[$event]{PauserCompleted});
-			writeXMLElement('PauseID',		"Task$Events[$event]{PauseTask}");
-			writeXMLElement('Pause',		nameTask($Events[$event]{PauseTask}));
-			writeXMLElement('ResumeType',	$Events[$event]{ResumerCompleted});
-			writeXMLElement('ResumeID',		$Events[$event]{ResumeTask});
-			writeXMLElement('Resume',		nameTask($Events[$event]{ResumeTask}));
-			writeXMLElement('Time1',		$Events[$event]{Time1});
-			writeXMLElement('Time2',		$Events[$event]{Time2});
-			writeXMLElement('PrefTime1',	$Events[$event]{PrefTime1});
-			writeXMLElement('PrefTime2',	$Events[$event]{PrefTime2});
-			writeXMLElementClose('Timing');
+		{	#Starting
+			writeXMLElementOpen('Starting');
+			writeXMLElement('Condition',	$Events[$event]{Start});
+			writeXMLElement('Description',	$Events[$event]{StartText})		unless $Events[$event]{StartText} eq '';
+			writeXMLElement('Effect',		$Events[$event]{StartEffect})	if defined $Events[$event]{StartEffect};
+			writeXMLElementClose('Starting');
 		}
-		{	#Descriptions
-			writeXMLElementOpen('Descriptions');
-			writeXMLElement('StartText',	$Events[$event]{StartText});
-			writeXMLElement('LookText',		$Events[$event]{LookText});
-			writeXMLElement('FinishText',	$Events[$event]{FinishText});
-			writeXMLElement('PrefText1',	$Events[$event]{PrefText2});
-			writeXMLElement('PrefText2',	$Events[$event]{PrefText2});
-			writeXMLElementClose('Descriptions');
+		{	#During
+			writeXMLElementOpen('During');
+			writeXMLElement('Description',	$Events[$event]{LookText})	unless $Events[$event]{LookText} eq '';
+			writeXMLElement('Pause',		$Events[$event]{Pause})		if defined $Events[$event]{Pause};
+			writeXMLElement('Resume',		$Events[$event]{Resume})	if defined $Events[$event]{Resume};
+			writeXMLElement('Midpoint1',	$Events[$event]{Midpoint1})	if $Events[$event]{PrefTime1};
+			writeXMLElement('Message1',		$Events[$event]{PrefText1})	if $Events[$event]{PrefTime1};
+			writeXMLElement('Midpoint2',	$Events[$event]{Midpoint2})	if $Events[$event]{PrefTime2};
+			writeXMLElement('Message2',		$Events[$event]{PrefText2})	if $Events[$event]{PrefTime2};
+			writeXMLElementClose('During');
 		}
-		{	#Effects
-			writeXMLElementOpen('Effects');
-			writeXMLElement('Obj1ID',		"ID$Events[$event]{Obj1}");
-			writeXMLElement('Obj1',			nameObject($Events[$event]{Obj1}));
-			writeXMLElement('Obj1Dest',		$Events[$event]{Obj1Dest});
-			writeXMLElement('Obj2ID',		"ID$Events[$event]{Obj2}");
-			writeXMLElement('Obj2',			nameObject($Events[$event]{Obj2}));
-			writeXMLElement('Obj2Dest',		$Events[$event]{Obj2Dest});
-			writeXMLElement('Obj3ID',		"ID$Events[$event]{Obj3}");
-			writeXMLElement('Obj3',			nameObject($Events[$event]{Obj3}));
-			writeXMLElement('Obj3Dest',		$Events[$event]{Obj3Dest});
-			writeXMLElement('AffectedID',	"Task$Events[$event]{TaskAffected}");
-			writeXMLElement('Affected',		nameTask($Events[$event]{TaskAffected}));
-			writeXMLElementClose('Effects');
+		{	#Ending
+			writeXMLElementOpen('Ending');
+			writeXMLElement('Duration',		$Events[$event]{Duration});
+			writeXMLElement('Description',	$Events[$event]{FinishText})	if defined $Events[$event]{FinishText};
+			writeXMLElement('Effect',		$Events[$event]{EndEffect1})	if defined $Events[$event]{EndEffect1};
+			writeXMLElement('Effect',		$Events[$event]{EndEffect2})	if defined $Events[$event]{EndEffect2};
+			writeXMLElement('Execute',		$Events[$event]{EndExecute})	if defined $Events[$event]{EndExecute};
+			writeXMLElementClose('Ending');
 		}
 		{	#Location
 			writeXMLElementOpen('Location');
@@ -3410,7 +3677,7 @@ sub nameGender($){
 	my $id	= shift;
 	return 'UnknownGender'			unless defined $id;
 	return $Symbol_Gender[$id]		if defined $Symbol_Gender[$id];
-	print $File_Log "WARNING: Unknown gender ID=$id\n";
+	print $File_Log "WARNING: Unknown gender ID$id\n";
 	return "person";
 }
 #XML Handling
