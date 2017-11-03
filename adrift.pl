@@ -25,6 +25,7 @@ my $Decompiler_Version		= '0.14';
 #v0.12:	Code restructuring
 #v0.13: Symbol generation
 #v0.14: Improved references
+#v0.15: Expanded XML output
 
 ##Global Variables
 #Story Settings
@@ -674,7 +675,10 @@ sub parseObject(){
 #	4: NPC_PART
 #	9: NULL/Off-stage
 	$object{Where}			= [];
-	push @{	$object{Where} }, nextLine if $object{WhereType} eq 1;
+	if ($object{WhereType} eq 1) {
+		my $roomID	= nextLine() + 1;
+		push @{	$object{Where} }, $roomID;
+	}
 	if($object{WhereType} eq 2){
 		for my $room (0 .. $#Rooms){ push @{ $object{Where} }, $room if nextLine(); }
 	}
@@ -864,7 +868,10 @@ sub parseTask(){
 #	4: NPC_PART
 #	9: NULL/Off-stage
 	$task{Where}				= [];
-	push @{	$task{Where} }, nextLine if $task{WhereType} eq 1;
+	if ($task{WhereType} eq 1) {
+		my $roomID	= nextLine() + 1;
+		push @{	$task{Where} }, $roomID;
+	}
 	if($task{WhereType} eq 2){
 		for my $room (1 .. $#Rooms){ push @{ $task{Where} }, $room if nextLine(); }
 	}
@@ -961,7 +968,10 @@ sub parseEvent(){
 #	4: NPC_PART
 #	9: NULL/Off-stage
 	$event{Where}			= ();
-	push @{	$event{Where} }, nextLine if $event{WhereType} eq 1;
+	if ($event{WhereType} eq 1) {
+		my $roomID	= nextLine() + 1;
+		push @{	$event{Where} }, $roomID;
+	}
 	if($event{WhereType} eq 2){
 		for my $room (1 .. $#Rooms){ push @{ $event{Where} }, $room if nextLine(); }
 	}
@@ -1649,13 +1659,15 @@ sub analyzeTask($){
 			my $location	= "UNKNOWN LOCATION $var3";
 			# 0: Room
 			if ($var2 % 6 eq 0) {
-				my $roomID		= $var3;
-				$location		= nameRoom($roomID);
-				#Record reference between task and room
-				push @{ $Rooms[$roomID]{TaskReferences} },
-					{ id => $task,		type => 'Restraining'};
-				push @{ $Tasks[$task]{RoomReferences} }, 
-					{ id => $roomID,	type => 'RestrainedBy'};
+				if ($var3 >= 0 && $var3 < @Rooms){
+					my $roomID		= $var3 +1;
+					$location		= nameRoom($roomID);
+					#Record reference between task and room
+					push @{ $Rooms[$roomID]{TaskReferences} },
+						{ id => $task,		type => 'Restraining'};
+					push @{ $Tasks[$task]{RoomReferences} }, 
+						{ id => $roomID,	type => 'RestrainedBy'};
+				}
 			}
 			# 1-3: Person
 			if ($var2 % 6 >= 1 && $var2 % 6 <= 3) {
@@ -1946,11 +1958,9 @@ sub analyzeTask($){
 			my $destination	= "UNKNOWN DESTINATION $var2 TO $var3";
 			# 0: Room
 			if ($var2 eq 0) {
-				# 0: Nowhere
-				$destination	= 'off stage'	if $var3 eq 0;
-				# 1+: Room
-				if ($var3 > 0 && $var3 <= @Rooms) {
-					my $roomID		= $var3;
+				# 0+: Room
+				if ($var3 >= 0 && $var3 < @Rooms) {
+					my $roomID		= $var3 +1;
 					$destination	= 'to '.nameRoom($roomID);
 					#Record reference between task and room
 					push @{ $Rooms[$roomID]{TaskReferences} },
@@ -2074,10 +2084,8 @@ sub analyzeTask($){
 			my $destination	= "UNKNOWN DESTINATION $var2 TO $var3";
 			# 0: Room
 			if ($var2 eq 0) {
-				# 0: Nowhere
-				$destination	= 'off stage'	if $var3 eq 0;
-				# 1+: Room
-				if ($var3 > 0 && $var3 <= @Rooms) {
+				# 0+: Room/Nowhere
+				if ($var3 >= 0 && $var3 < @Rooms) {
 					my $roomID		= $var3;
 					$destination	= 'to '.nameRoom($roomID);
 					#Record reference between task and room
@@ -2303,6 +2311,9 @@ sub analyzeTask($){
 	}
 	#TODO Classify task by interpreting task name or commands
 }	
+sub analyzeEvent($){
+
+}
 ##Generate output
 sub generate(){
 	generateXML();
@@ -2311,6 +2322,7 @@ sub generate(){
 #Generate XML Output
 sub generateXML(){
 	print $File_Log "Generating XML File\n";
+	print $File_XML "<!-- Decompiled by $Decompiler_Version at ".localtime." -->";
 	writeXMLElementOpen('Story');
 	generateXMLHeader();
 	generateXMLRooms();
@@ -2327,8 +2339,6 @@ sub generateXMLHeader(){
 	writeXMLElement('Title',			$Story{Title});
 	writeXMLElement('Author',			$Story{Author});
 	writeXMLElement('Compiled',			$Story{CompileDate});
-	writeXMLElement('Decompiler',		$Decompiler_Version);
-	writeXMLElement('Decompiled',		''.localtime);
 	writeXMLElement('StartLocation',	$Story{Start});
 	writeXMLElement('WaitingTurns',		$Story{WaitTurns});
 	writeXMLElement('Perspective',		$Story{Perspective});
@@ -2907,7 +2917,63 @@ sub generateXMLEvents(){
 			writeXMLElement('Restart',		$Events[$event]{RestartType});
 			writeXMLElementClose('Properties');
 		}
-		#TODO
+		{	#Timing
+			writeXMLElementOpen('Timing');
+			writeXMLElement('TriggerType',	$Events[$event]{TaskFinished});
+			writeXMLElement('TriggerID',	"Task$Events[$event]{TaskNum}")		if defined $Events[$event]{TaskNum};
+			writeXMLElement('Trigger',		nameTask($Events[$event]{TaskNum}))	if defined $Events[$event]{TaskNum};
+			writeXMLElement('Start',		$Events[$event]{StartTime})			if defined $Events[$event]{StartTime};
+			writeXMLElement('End',			$Events[$event]{EndTime})			if defined $Events[$event]{EndTime};
+			writeXMLElement('PauseType',	$Events[$event]{PauserCompleted});
+			writeXMLElement('PauseID',		"Task$Events[$event]{PauseTask}");
+			writeXMLElement('Pause',		nameTask($Events[$event]{PauseTask}));
+			writeXMLElement('ResumeType',	$Events[$event]{ResumerCompleted});
+			writeXMLElement('ResumeID',		$Events[$event]{ResumeTask});
+			writeXMLElement('Resume',		nameTask($Events[$event]{ResumeTask}));
+			writeXMLElement('Time1',		$Events[$event]{Time1});
+			writeXMLElement('Time2',		$Events[$event]{Time2});
+			writeXMLElement('PrefTime1',	$Events[$event]{PrefTime1});
+			writeXMLElement('PrefTime2',	$Events[$event]{PrefTime2});
+			writeXMLElementClose('Timing');
+		}
+		{	#Descriptions
+			writeXMLElementOpen('Descriptions');
+			writeXMLElement('StartText',	$Events[$event]{StartText});
+			writeXMLElement('LookText',		$Events[$event]{LookText});
+			writeXMLElement('FinishText',	$Events[$event]{FinishText});
+			writeXMLElement('PrefText1',	$Events[$event]{PrefText2});
+			writeXMLElement('PrefText2',	$Events[$event]{PrefText2});
+			writeXMLElementClose('Descriptions');
+		}
+		{	#Effects
+			writeXMLElementOpen('Effects');
+			writeXMLElement('Obj1ID',		"ID$Events[$event]{Obj1}");
+			writeXMLElement('Obj1',			nameObject($Events[$event]{Obj1}));
+			writeXMLElement('Obj1Dest',		$Events[$event]{Obj1Dest});
+			writeXMLElement('Obj2ID',		"ID$Events[$event]{Obj2}");
+			writeXMLElement('Obj2',			nameObject($Events[$event]{Obj2}));
+			writeXMLElement('Obj2Dest',		$Events[$event]{Obj2Dest});
+			writeXMLElement('Obj3ID',		"ID$Events[$event]{Obj3}");
+			writeXMLElement('Obj3',			nameObject($Events[$event]{Obj3}));
+			writeXMLElement('Obj3Dest',		$Events[$event]{Obj3Dest});
+			writeXMLElement('AffectedID',	"Task$Events[$event]{TaskAffected}");
+			writeXMLElement('Affected',		nameTask($Events[$event]{TaskAffected}));
+			writeXMLElementClose('Effects');
+		}
+		{	#Location
+			writeXMLElementOpen('Location');
+			#0: No Rooms
+			writeXMLElement('Nowhere')	if $Events[$event]{WhereType} eq 0;
+			#1-2: Specific Roomlist
+			if( $Events[$event]{WhereType} eq 1 or $Events[$event]{WhereType} eq 2){
+				my @rooms = @{ $Events[$event]{Where} };
+				foreach my $room (@rooms){ writeXMLElement('Room', nameRoom($room)) }
+			}
+			#3: All Rooms
+			writeXMLElement('Everywhere')	if $Events[$event]{WhereType} eq 3;
+			writeXMLElementClose('Location');
+		}
+			#Resources	TODO
 		{	#Relations
 			my @rooms		= @{ $Events[$event]{RoomReferences} };
 			my @objects		= @{ $Events[$event]{ObjectReferences} };
