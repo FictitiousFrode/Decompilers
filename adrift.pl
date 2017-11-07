@@ -461,7 +461,7 @@ sub parse(){
 sub parseHeader(){
 	#Intro Text
 	$Story{Intro}			= nextMulti();
-	$Story{Start}			= nextLine() + 1;	#NOTE: The only place rooms are indexed from 0
+	$Story{Start}			= nextLine() + 1;
 	$Story{Ending}			= nextMulti();
 	#text	GameName
 	$Story{Title}			= nextLine();
@@ -1617,9 +1617,10 @@ sub analyzeTask($){
 	#Interpret the restrictions of the task; screstrs.restr_pass_task_restriction (pp21-22)
 	for my $id (0 .. $restrictions - 1){
 		my %restriction	= %{ $Tasks[$task]{Restrictions}[$id] };
+		my $type		= $restriction{Type};
 		my $text;
 		#ObjectLocation: ObjectID, Condition, Location;
-		if($restriction{Type} eq 0){
+		if($type eq 0){
 			my $var1	= $restriction{Var1};
 			my $var2	= $restriction{Var2};
 			my $var3	= $restriction{Var3};
@@ -1632,7 +1633,7 @@ sub analyzeTask($){
 			# 2=Referenced
 			$object			= 'referenced object'	if $var1 eq 2;
 			# 3+: Portable Object
-			if ($var1 > 2 && $var1 <= (2 + @ObjectPortable)) {
+			if (3 <= $var1 && $var1 <= @ObjectPortable + 2) {
 				my $objectID	= $ObjectPortable[$var1-2];
 				$object			= nameObject($objectID);
 				#Record reference between task and object
@@ -1641,6 +1642,8 @@ sub analyzeTask($){
 				push @{ $Tasks[$task]{ObjectReferences} },
 					{ id => $objectID,	type => 'RestrainedBy'};
 			}
+			#Log warning
+			print $File_Log "WARNING\tTask$task\tRestrictionType=$type ($var1:$var2:$var3) unhandled object (v1)\n" unless 0 <= $var1 && $var1 <= @ObjectPortable+2;
 			#ConditionType
 			my $condition	= "UNKNOWN CONDITION $var2";
 			# 0& 6=In Room
@@ -1661,12 +1664,14 @@ sub analyzeTask($){
 			# 5&11=On surface
 			$condition		= 'on top of'			if $var2 eq 5;
 			$condition		= 'not on top of'		if $var2 eq 11;
+			#Log warning
+			print $File_Log "WARNING\tTask$task\tRestrictionType=$type ($var1:$var2:$var3) unhandled condition (v2)\n" unless 0 <= $var2 && $var2 <= 11;
 			#Location; depending on condition
 			my $location	= "UNKNOWN LOCATION $var3";
 			# 0: Room
 			if ($var2 % 6 eq 0) {
-				if ($var3 >= 0 && $var3 < @Rooms){
-					my $roomID		= $var3 +1;
+				if (0 <= $var3 && $var3 < @Rooms){
+					my $roomID		= $var3 + 1;
 					$location		= nameRoom($roomID);
 					#Record reference between task and room
 					push @{ $Rooms[$roomID]{TaskReferences} },
@@ -1674,15 +1679,17 @@ sub analyzeTask($){
 					push @{ $Tasks[$task]{RoomReferences} }, 
 						{ id => $roomID,	type => 'RestrainedBy'};
 				}
+				#Log warning
+				print $File_Log "WARNING\tTask$task\tRestrictionType=$type ($var1:$var2:$var3) unhandled room (v3)\n" unless 1 <= $var3 && $var3 <= @Rooms;
 			}
 			# 1-3: Person
-			if ($var2 % 6 >= 1 && $var2 % 6 <= 3) {
+			if (1 <= $var2 % 6 && $var2 % 6 <= 3) {
 				# 0: The player
 				$location		= 'the player'		if $var3 eq 0;
 				# 1: The referenced person
 				$location		= 'referenced'		if $var3 eq 1;
 				# 2+: PersonID
-				if ($var3 > 1 && $var3 <= (1 + @Persons)){
+				if (1 < $var3 && $var3 <= @Persons + 1){
 					my $personID	= $var3-1;
 					$location		= 'by '.namePerson($personID);
 					#Record reference between task and person
@@ -1691,8 +1698,10 @@ sub analyzeTask($){
 					push @{ $Tasks[$task]{PersonReferences} }, 
 						{ id => $personID,	type => 'RestrainedBy'};
 				}
+				#Log warning
+				print $File_Log "WARNING\tTask$task\tRestrictionType=$type ($var1:$var2:$var3) unhandled person (v3)\n" unless 0 <= $var3 && $var3 <= @Persons+1;
 			}
-			#4-5: Container
+			#4: Container
 			if ($var2 % 6 eq 4) {
 				my $objectID	= $ObjectContainer[$var3];
 				$location		= nameObject($objectID);
@@ -1701,6 +1710,8 @@ sub analyzeTask($){
 					{ id => $task,		type => 'Restraining'};
 				push @{ $Tasks[$task]{ObjectReferences} },
 					{ id => $objectID,	type => 'RestrainedBy'};
+				#Log warning
+				print $File_Log "WARNING\tTask$task\tRestrictionType=$type ($var1:$var2:$var3) unhandled container (v3)\n" unless 1 <= $var3 && $var3 <= @ObjectContainer;
 			}
 			#5: Supporter
 			if ($var2 % 6 eq 5) {
@@ -1711,20 +1722,22 @@ sub analyzeTask($){
 					{ id => $task,		type => 'Restraining'};
 				push @{ $Tasks[$task]{ObjectReferences} },
 					{ id => $objectID,	type => 'RestrainedBy'};
+				#Log warning
+				print $File_Log "WARNING\tTask$task\tRestrictionType=$type ($var1:$var2:$var3) unhandled surface (v3)\n" unless 1 <= $var3 && $var3 <= @ObjectSurface;
 			}
 			#Assemble the full text
 			$text	= "Unless $object is $condition $location";
 		}
 		#ObjectState:	ObjectID, State		TODO
-		if($restriction{Type} eq 1){
+		if($type eq 1){
 			my $var1	= $restriction{Var1};
 			my $var2	= $restriction{Var2};
 			#ObjectID
 			my $object		= "UNKNOWN OBJECT $var1";
 			# 0: Referenced
 			$object			= 'referenced object'		if $var1 eq 0;
-			# 1+: Openable ObjectID
-			if ($var1 > 0 && $var1 <= @ObjectStateful) {
+			# 1+: Stateful ObjectID
+			if (1 <= $var1 && $var1 <= @ObjectStateful) {
 				my $objectID	= $ObjectStateful[$var1];
 				$object			= nameObject($objectID);
 				#Record reference between task and object
@@ -1735,11 +1748,13 @@ sub analyzeTask($){
 			}
 			#State
 			my $state		= "UNKNOWN STATE $var2";
-			#Assemble the full text
+			#Assemble the full text and log warning
 			$text	= "Unless $object is $state";
+			print $File_Log "WARNING\tTask$task\tRestrictionType=$type ($var1:$var2) unhandled object (v1)\n" unless 0 <= $var1 && $var1 <= @ObjectStateful;
+			print $File_Log "WARNING\tTask$task\tRestrictionType=$type ($var1:$var2) unhandled state (v2)\n";
 		}
 		#TaskState:		Task, State
-		if($restriction{Type} eq 2){
+		if($type eq 2){
 			my $var1	= $restriction{Var1};
 			my $var2	= $restriction{Var2};
 			#TaskID
@@ -1762,11 +1777,13 @@ sub analyzeTask($){
 			$state			= 'performed'		if $var2 eq 0;
 			# 1: Not Performed
 			$state			= 'not performed'	if $var2 eq 1;
-			#Assemble the full text
+			#Assemble the full text and log warning
 			$text	= "Unless $restrictor is $state";
+			print $File_Log "WARNING\tTask$task\tRestrictionType=$type ($var1:$var2) unhandled task (v1)\n"		unless 0 <= $var1 && $var1 <= @Tasks;
+			print $File_Log "WARNING\tTask$task\tRestrictionType=$type ($var1:$var2) unhandled state (v2)\n"	unless 0 <= $var2 && $var2 <= 1;
 		}
 		#Person:		PersonID, Condition, Location
-		if($restriction{Type} eq 3){
+		if($type eq 3){
 			my $var1	= $restriction{Var1};
 			my $var2	= $restriction{Var2};
 			my $var3	= $restriction{Var3};
@@ -1777,7 +1794,7 @@ sub analyzeTask($){
 			# 1: Referenced
 			$person			= 'referenced person'		if $var1 eq 1;
 			# 2+: PersonID
-			if ($var1 > 1 && $var1 <= (1 + @Persons)){
+			if (2 <= $var1 && $var1 <= @Persons + 1){
 				my $personID	= $var1-1;
 				$person			= namePerson($personID);
 				#Record reference between task and person
@@ -1786,6 +1803,8 @@ sub analyzeTask($){
 				push @{ $Tasks[$task]{PersonReferences} }, 
 					{ id => $personID,	type => 'RestrainedBy'};
 			}
+			#Log warning
+			print $File_Log "WARNING\tTask$task\tRestrictionType=$type ($var1:$var2:$var3) unhandled person (v1)\n" unless 0 <= $var1 && $var1 <= @Persons+1;
 			#Condition
 			my $condition	= "UNKNOWN CONDITION $var2";
 			# 0=In same room as
@@ -1804,16 +1823,18 @@ sub analyzeTask($){
 			$condition		= 'lying on'				if $var2 eq 6;
 			# 7=Gender
 			$condition		= ''						if $var2 eq 7;
+			#Log warning
+			print $File_Log "WARNING\tTask$task\tRestrictionType=$type ($var1:$var2:$var3) unhandled condition (v2)\n" unless 0 <= $var2 && $var2 <= 7;
 			#Location; depending on condition
 			my $location	= "UNKNOWN LOCATION $var3";
 			#0-1: Person
-			if ($var2 eq 0 or $var2 eq 1) {
+			if (0 <= $var2 && $var2 <= 1) {
 				# 0=Player
 				$location		= 'the player'			if $var3 eq 0;
 				# 1=Referenced
 				$location		= 'referenced'			if $var3 eq 1;
 				# 2+: PersonID
-				if ($var3 > 1 && $var3 <= (1 + @Persons)) {
+				if (2 <= $var3 && $var3 <= @Persons + 1) {
 					my $personID	= $var3-1;
 					$location		= namePerson($personID);
 					#Record reference between task and person
@@ -1822,20 +1843,29 @@ sub analyzeTask($){
 					push @{ $Tasks[$task]{PersonReferences} }, 
 						{ id => $personID,	type => 'RestrainedBy'};
 				}
+				#Log warning
+				print $File_Log "WARNING\tTask$task\tRestrictionType=$type ($var1:$var2:$var3) unhandled person (v3)\n" unless 0 <= $var3 && $var3 <= @Persons+1;
 			}
 			#2-3: Blank
-			if ($var2 eq 2 or $var2 eq 3) {
+			if (2 <= $var2 && $var2 <= 3) {
 				$location		= '';
 			}
 			#4-5: Sit/Standable
-			if ($var2 eq 4 or $var2 eq 5) {
-				my $objectID	= $ObjectSitStandable[$var3];
-				$location		= nameObject($objectID);
-				#Record reference between task and object
-				push @{ $Objects[$objectID]{TaskReferences} },
-					{ id => $task,		type => 'Restraining'};
-				push @{ $Tasks[$task]{ObjectReferences} },
-					{ id => $objectID,	type => 'RestrainedBy'};
+			if (4 <= $var2 && $var2 <= 5) {
+				# 0: ground (ie nothing)
+				$location		= 'the ground'	if $var3 eq 0;
+				# 1+: Object
+				if (1 <= $var3 && $var3 <= @ObjectSitStandable) {
+					my $objectID	= $ObjectSitStandable[$var3];
+					$location		= nameObject($objectID);
+					#Record reference between task and object
+					push @{ $Objects[$objectID]{TaskReferences} },
+						{ id => $task,		type => 'Restraining'};
+					push @{ $Tasks[$task]{ObjectReferences} },
+						{ id => $objectID,	type => 'RestrainedBy'};
+				}
+				#Log warning
+				print $File_Log "WARNING\tTask$task\tRestrictionType=$type ($var1:$var2:$var3) unhandled sitstandable (v3)\n" unless 0 <= $var3 && $var3 <= @ObjectSitStandable;
 			}
 			#6: Lieable
 			if ($var2 eq 6) {
@@ -1846,16 +1876,20 @@ sub analyzeTask($){
 					{ id => $task,		type => 'Restraining'};
 				push @{ $Tasks[$task]{ObjectReferences} },
 					{ id => $objectID,	type => 'RestrainedBy'};
+				#Log warning
+				print $File_Log "WARNING\tTask$task\tRestrictionType=$type ($var1:$var2:$var3) unhandled lieable (v3)\n" unless 1 <= $var3 && $var3 <= @ObjectLieable;
 			}
 			#7: Gender
 			if ($var2 eq 7) {
-				$location		= 'a '.nameGender($var3);
+				$location		= nameGender($var3);
+				#Log warning
+				print $File_Log "WARNING\tTask$task\tRestrictionType=$type ($var1:$var2:$var3) unhandled gender (v3)\n" unless 0 <= $var3 && $var3 <= @Symbol_Gender;
 			}
 			#Assemble the full text
 			$text	= "Unless $person is $condition $location";
 		}
 		#Variable:		VariableID, Operator, Number, Text
-		if($restriction{Type} eq 4){
+		if($type eq 4){
 			my $var1	= $restriction{Var1};
 			my $var2	= $restriction{Var2};
 			my $var3	= $restriction{Var3};
@@ -1874,7 +1908,7 @@ sub analyzeTask($){
 				$numeric		= 0;
 			}
 			# 2+: Variable
-			if ($var1 > 1 && $var1 <= (1 + @Variables)) {
+			if (2 <= $var1 && $var1 <= (1 + @Variables)) {
 				my $variableID	= $var1-1;
 				$variable		= nameVariable($variableID);
 				$numeric		= 1 if $Variables[$variableID]{Type} eq 0;
@@ -1884,10 +1918,13 @@ sub analyzeTask($){
 				push @{ $Tasks[$task]{VariableReferences} },
 					{ id => $variableID,	type => 'RestrainedBy'};
 			}
+			#Log warning
+			print $File_Log "WARNING\tTask$task\tRestrictionType=$type ($var1:$var2:$var3:$var4) unhandled variable (v1)\n" unless 0 <= $var1 && $var1 <= @Variables+1;
 			#Operator determines comparator
 			my $operator	= "UNKNOWN OPERATOR $var2";
 			my $comparator	= "UNKNOWN COMPARATOR $var2";
-			if ($numeric) {	# Numeric variables
+			#Numeric variables:
+			if ($numeric) {
 				# 0,10: <
 				$operator		= 'less than'			if $var2 % 10 eq 0;
 				# 1,11: <
@@ -1900,14 +1937,18 @@ sub analyzeTask($){
 				$operator		= 'greater than'		if $var2 % 10 eq 4;
 				# 5,15: !=
 				$operator		= 'different to'		if $var2 % 10 eq 5;
+				#Log warning
+				print $File_Log "WARNING\tTask$task\tRestrictionType=$type ($var1:$var2:$var3:$var4) unhandled operator (v2)\n" unless (0 <= $var2 && $var2 <= 5) or (10 <= $var2 && $var2 <= 15);
 				#Direct value comparison
 				if ($var2 < 10){
 					$comparator		= $var3;
 				}
 				#Reference comparison
 				else {
+					#0: Referenced number
 					$comparator		= 'referenced number'	if $var3 eq 0;
-					if ($var3 > 0 && $var3 <= @Variables) {
+					#1: Variable
+					if (1 <= $var3 && $var3 <= @Variables) {
 						my $variableID	= $var3;
 						$comparator		= nameVariable($variableID);
 						#Record reference between task and variable
@@ -1916,21 +1957,26 @@ sub analyzeTask($){
 						push @{ $Tasks[$task]{VariableReferences} },
 							{ id => $variableID,	type => 'RestrainedBy'};
 					}
+					#Log warning
+					print $File_Log "WARNING\tTask$task\tRestrictionType=$type ($var1:$var2:$var3:$var4) unhandled variable (v3)\n" unless 0 <= $var3 && $var3 <= @Variables;
 				}
 			}
-			else {	# String variables
+			#String variables
+			else {
 				$comparator	= $var4;
 				# 0: ==
 				$operator	= 'equal to'		if $var2 eq 0;
 				# 1: !=
 				$operator	= 'different to'	if $var2 eq 1;
+				#Log warning
+				print $File_Log "WARNING\tTask$task\tType=$type ($var1:$var2:$var3:$var4) unhandled operator (v2)\n" unless 0 <= $var2 && $var2 <= 1;
 			}
 			#Assemble the full text
 			$text	= "Unless $variable is $operator $comparator";
-			#Formula	TODO
-			$text	.= " UNKNOWN FORMULA $var4"	unless $var4 eq '';
 		}
+		#Store and log warning
 		$Tasks[$task]{Restrictions}[$id]{Condition}		= $text if defined $text;
+		print $File_Log "WARNING\tTask$task\tRestrictionType=$type unhandled\n" unless 0 <= $type && $type <= 4;
 	}
 	#Interpret the actions of the task
 	for my $id (0 .. $actions - 1){
@@ -1951,119 +1997,104 @@ sub analyzeTask($){
 			# 2: Referenced
 			$object			= 'referenced object'	if $var1 eq 2;
 			# 3+: Portable Object
-			if ($var1 > 2 && $var1 <= (2 + @ObjectPortable)) {
+			if (3 <= $var1 && $var1 <= @ObjectPortable + 2) {
 				my $objectID	= $ObjectPortable[$var1-2];
 				$object			= nameObject($objectID);
 				#Record reference between task and object
 				push @{ $Objects[$objectID]{TaskReferences} },
-					{ id => $task,		type => 'ActionedBy'};
+					{ id => $task,		type => 'MovedBy'};
 				push @{ $Tasks[$task]{ObjectReferences} },
-					{ id => $objectID,	type => 'Actioning'};
+					{ id => $objectID,	type => 'Moving'};
 			}
 			#DestinationType determines the value of the Location
 			my $destination	= "UNKNOWN DESTINATION $var2 TO $var3";
 			# 0: Room
 			if ($var2 eq 0) {
-				# 0+: Room
-				if ($var3 >= 0 && $var3 < @Rooms) {
+				# 0+: RoomID
+				if (0 <= $var3 && $var3 <= @Rooms - 1) {
 					my $roomID		= $var3 +1;
 					$destination	= 'to '.nameRoom($roomID);
 					#Record reference between task and room
 					push @{ $Rooms[$roomID]{TaskReferences} },
-						{ id => $task,		type => 'ActionedBy'};
+						{ id => $task,		type => 'TargetedBy'};
 					push @{ $Tasks[$task]{RoomReferences} },
-						{ id => $roomID,	type => 'Actioning'};
+						{ id => $roomID,	type => 'Targeting'};
 				}
+				#Log warning
+				print $File_Log "WARNING\tTask$task\tActionType=$type ($var1:$var2:$var3) unhandled room (v3)\n" unless 0 <= $var3 && $var3 <= @Rooms-1;
 			}
 			# 1: RoomGroup
 			if ($var2 eq 1) {
-				my $groupID		= $var3;
-				$destination	= 'to random room in '.nameGroup($groupID);
-				#Record reference between task and roomgroup
-				push @{ $Groups[$groupID]{TaskReferences} },
-					{ id => $task,		type => 'ActionedBy'};
-				push @{ $Tasks[$task]{GroupReferences} },
-					{ id => $groupID,	type => 'Actioning'};
+				# 0+: RoomGroupID
+				if (0 <= $var3 && $var3 <= @Groups - 1) {
+					my $groupID		= $var3+1;
+					$destination	= 'to random room in '.nameGroup($groupID);
+					#Record reference between task and roomgroup
+					push @{ $Groups[$groupID]{TaskReferences} },
+						{ id => $task,		type => 'TargetedBy'};
+					push @{ $Tasks[$task]{GroupReferences} },
+						{ id => $groupID,	type => 'Targeting'};
+				}
+				#Log warning
+				print $File_Log "WARNING\tTask$task\tActionType=$type ($var1:$var2:$var3) unhandled roomgroup (v3)\n" unless 1 <= $var3 && $var3 <= @Groups-1;
 			}
 			# 2: Container
 			if ($var2 eq 2) {
-				my $objectID	= $ObjectContainer[$var3];
-				$destination	= 'inside '.nameObject($objectID);
-				#Record reference between task and object
-				push @{ $Objects[$objectID]{TaskReferences} },
-					{ id => $task,		type => 'ActionedBy'};
-				push @{ $Tasks[$task]{ObjectReferences} },
-					{ id => $objectID,	type => 'Actioning'};
+				# 0+: ContainerID
+				if (0 <= $var3 && $var3 <= @ObjectContainer - 1) {
+					my $objectID	= $ObjectContainer[$var3+1];
+					$destination	= 'inside '.nameObject($objectID);
+					#Record reference between task and object
+					push @{ $Objects[$objectID]{TaskReferences} },
+						{ id => $task,		type => 'TargetedBy'};
+					push @{ $Tasks[$task]{ObjectReferences} },
+						{ id => $objectID,	type => 'Targeting'};
+				}
+				#Log warning
+				print $File_Log "WARNING\tTask$task\tActionType=$type ($var1:$var2:$var3) unhandled container (v3)\n" unless 0 <= $var3 && $var3 <= @ObjectContainer-1;
 			}				
 			# 3: Supporter
 			if ($var2 eq 3) {
-				my $objectID	= $ObjectSurface[$var3];
-				$destination	= 'on top of '.nameObject($objectID);
-				#Record reference between task and object
-				push @{ $Objects[$objectID]{TaskReferences} },
-					{ id => $task,		type => 'ActionedBy'};
-				push @{ $Tasks[$task]{ObjectReferences} },
-					{ id => $objectID,	type => 'Actioning'};
+				# 0+: SupporterID
+				if (0 <= $var3 && $var3 <= @ObjectSurface - 1) {
+					my $objectID	= $ObjectSurface[$var3+1];
+					$destination	= 'on top of '.nameObject($objectID);
+					#Record reference between task and object
+					push @{ $Objects[$objectID]{TaskReferences} },
+						{ id => $task,		type => 'TargetedBy'};
+					push @{ $Tasks[$task]{ObjectReferences} },
+						{ id => $objectID,	type => 'Targeting'};
+				}
+				#Log warning
+				print $File_Log "WARNING\tTask$task\tActionType=$type ($var1:$var2:$var3) unhandled supporter (v3)\n" unless 0 <= $var3 && $var3 <= @ObjectSurface-1;
 			}
-			# 4: Carried by Person
-			if ($var2 eq 4) {
+			# 4-6: Person (carried by, worn by, location of)
+			if (4 <= $var2 && $var2 <= 6) {
 				my $target	= "UNKNOWN TARGET $var3";
 				# 0: The player
 				$target		= 'the player'			if $var3 eq 0;
 				# 1: Referenced Person
 				$target		= 'referenced person'	if $var3 eq 1;
 				# 2+: Person
-				if ($var3 > 1 && $var3 <= 1 + @Persons) {
+				if (2 <= $var3 && $var3 <= @Persons + 1) {
 					my $personID	= $var3 - 1;
 					$target			= namePerson($personID);
 					#Record reference between task and person
 					push @{ $Persons[$personID]{TaskReferences} },
-						{ id => $task,		type => 'ActionedBy'};
+						{ id => $task,		type => 'TargetedBy'};
 					push @{ $Tasks[$task]{PersonReferences} },
-						{ id => $personID,	type => 'Actioning'};
+						{ id => $personID,	type => 'Targeting'};
 				}
-				$destination	= "to $target (carried)";
+				#Assemble and log warning
+				$destination	= "to $target (carried)"	if $var2 eq 4;
+				$destination	= "to $target (worn)"		if $var2 eq 5;
+				$destination	= "to location of $target"	if $var2 eq 6;
+				print $File_Log "WARNING\tTask$task\tActionType=$type ($var1:$var2:$var3) unhandled person (v3)\n" unless 0 <= $var3 && $var3 <= @Persons + 1;
 			}
-			# 5: Worn by Person
-			if ($var2 eq 5) {
-				my $target	= "UNKNOWN TARGET $var3";
-				# 0: The player
-				$target		= 'the player'			if $var3 eq 0;
-				# 1: Referenced Person
-				$target		= 'referenced person'	if $var3 eq 1;
-				# 2+: Person
-				if ($var3 > 1 && $var3 <= 1 + @Persons) {
-					my $personID	= $var3 - 1;
-					$target			= namePerson($personID);
-					#Record reference between task and person
-					push @{ $Persons[$personID]{TaskReferences} },
-						{ id => $task,		type => 'ActionedBy'};
-					push @{ $Tasks[$task]{PersonReferences} },
-						{ id => $personID,	type => 'Actioning'};
-				}
-				$destination	= "to $target (worn)";
-			}
-			# 6: Location of Person
-			if ($var2 eq 6) {
-				my $target	= "UNKNOWN TARGET $var3";
-				# 0: The player
-				$target		= 'the player'			if $var3 eq 0;
-				# 1: Referenced Person
-				$target		= 'referenced person'	if $var3 eq 1;
-				# 2+: Person
-				if ($var3 > 1 && $var3 <= 1 + @Persons) {
-					my $personID	= $var3 - 1;
-					$target			= namePerson($personID);
-					#Record reference between task and person
-					push @{ $Persons[$personID]{TaskReferences} },
-						{ id => $task,		type => 'ActionedBy'};
-					push @{ $Tasks[$task]{PersonReferences} },
-						{ id => $personID,	type => 'Actioning'};
-				}
-				$destination	= "to location of $target";
-			}
-			#Assemble the full text
+			#Assemble the full text and log warning
 			$text	= "Move $object $destination";
+			print $File_Log "WARNING\tTask$task\tActionType=$type ($var1:$var2:$var3) unhandled Object (v1)\n" unless 0 <= $var1 && $var1 <= @ObjectPortable+2;
+			print $File_Log "WARNING\tTask$task\tActionType=$type ($var1:$var2:$var3) unhandled destination (v2)\n" unless 0 <= $var2 && $var2 <= 6;
 		}
 		#MovePerson:	PersonID, DestinationType, Location
 		if($type eq 1){
@@ -2077,39 +2108,46 @@ sub analyzeTask($){
 			# 1: Referenced
 			$person			= 'referenced person'	if $var1 eq 1;
 			# 2+: Person
-			if ($var1 > 1 && $var1 <= (1 + @Persons)) {
+			if (2 <= $var1 && $var1 <= @Persons + 1) {
 				my $personID	= $var1-1;
 				$person			= namePerson($personID);
 				#Record reference between task and person
 				push @{ $Persons[$personID]{TaskReferences} },
-					{ id => $task,		type => 'ActionedBy'};
+					{ id => $task,		type => 'MovedBy'};
 				push @{ $Tasks[$task]{PersonReferences} },
-					{ id => $personID,	type => 'Actioning'};
+					{ id => $personID,	type => 'Moving'};
 			}
 			#DestinationType determines the value of the Location
 			my $destination	= "UNKNOWN DESTINATION $var2 TO $var3";
 			# 0: Room
 			if ($var2 eq 0) {
 				# 0+: Room/Nowhere
-				if ($var3 >= 0 && $var3 < @Rooms) {
+				if (0 <= $var3 && $var3 < @Rooms) {
 					my $roomID		= $var3;
 					$destination	= 'to '.nameRoom($roomID);
 					#Record reference between task and room
 					push @{ $Rooms[$roomID]{TaskReferences} },
-						{ id => $task,		type => 'ActionedBy'};
+						{ id => $task,		type => 'TargetedBy'};
 					push @{ $Tasks[$task]{RoomReferences} },
-						{ id => $roomID,	type => 'Actioning'};
+						{ id => $roomID,	type => 'Targeting'};
 				}
+				#Log warning
+				print $File_Log "WARNING\tTask$task\tActionType=$type ($var1:$var2:$var3) unhandled room (v3)\n" unless 0 <= $var3 && $var3 <= @Rooms-1;
 			}
 			# 1: RoomGroup
 			if ($var2 eq 1) {
-				my $groupID		= $var3;
-				$destination	= 'to random room in '.nameGroup($groupID);
-				#Record reference between task and roomgroup
-				push @{ $Groups[$groupID]{TaskReferences} },
-					{ id => $task,		type => 'ActionedBy'};
-				push @{ $Tasks[$task]{GroupReferences} },
-					{ id => $groupID,	type => 'Actioning'};
+				# 0+: RoomGroup
+				if (0 <= $var3 && $var3 <= @Groups-1) {
+					my $groupID		= $var3-1;
+					$destination	= 'to random room in '.nameGroup($groupID);
+					#Record reference between task and roomgroup
+					push @{ $Groups[$groupID]{TaskReferences} },
+						{ id => $task,		type => 'TargetedBy'};
+					push @{ $Tasks[$task]{GroupReferences} },
+						{ id => $groupID,	type => 'Targeting'};
+				}
+				#Log warning
+				print $File_Log "WARNING\tTask$task\tActionType=$type ($var1:$var2:$var3) unhandled roomgroup (v3)\n" unless 0 <= $var3 && $var3 <= @Groups-1;
 			}
 			# 2: Location of Person
 			if ($var2 eq 2) {
@@ -2119,49 +2157,68 @@ sub analyzeTask($){
 				# 1: Referenced Person
 				$target		= 'referenced person'	if $var3 eq 1;
 				# 2+: Person
-				if ($var3 > 1 && $var3 <= 1 + @Persons) {
+				if (2 <= $var3 && $var3 <= @Persons + 1) {
 					my $personID	= $var3 - 1;
 					$target			= namePerson($personID);
 					#Record reference between task and person
 					push @{ $Persons[$personID]{TaskReferences} },
-						{ id => $task,		type => 'ActionedBy'};
+						{ id => $task,		type => 'TargetedBy'};
 					push @{ $Tasks[$task]{PersonReferences} },
-						{ id => $personID,	type => 'Actioning'};
+						{ id => $personID,	type => 'Targeting'};
 				}
+				#Assemble and log warning
 				$destination	= "to location of $target";
+				print $File_Log "WARNING\tTask$task\tActionType=$type ($var1:$var2:$var3) unhandled person (v3)\n" unless 0 <= $var3 && $var3 <= @Persons+1;
 			}
 			# 3: Standing on
 			if ($var2 eq 3) {
-				my $objectID	= $ObjectSitStandable[$var3];
-				$destination	= 'standing on '.nameObject($objectID);
-				#Record reference between task and object
-				push @{ $Objects[$objectID]{TaskReferences} },
-					{ id => $task,		type => 'ActionedBy'};
-				push @{ $Tasks[$task]{ObjectReferences} },
-					{ id => $objectID,	type => 'Actioning'};
+				# 0+: Object
+				if (0 <= $var3 && $var3 <= @ObjectSitStandable) {
+					my $objectID	= $ObjectSitStandable[$var3];
+					$destination	= 'standing on '.nameObject($objectID);
+					#Record reference between task and object
+					push @{ $Objects[$objectID]{TaskReferences} },
+						{ id => $task,		type => 'TargetedBy'};
+					push @{ $Tasks[$task]{ObjectReferences} },
+						{ id => $objectID,	type => 'Targeting'};
+				}
+				#Log warning
+				print $File_Log "WARNING\tTask$task\tActionType=$type ($var1:$var2:$var3) unhandled object (v3)\n" unless 0 <= $var3 && $var3 <= @ObjectSitStandable;
 			}
 			# 4: Sitting on
 			if ($var2 eq 4) {
-				my $objectID	= $ObjectSitStandable[$var3];
-				$destination	= 'sitting on '.nameObject($objectID);
-				#Record reference between task and object
-				push @{ $Objects[$objectID]{TaskReferences} },
-					{ id => $task,		type => 'ActionedBy'};
-				push @{ $Tasks[$task]{ObjectReferences} },
-					{ id => $objectID,	type => 'Actioning'};
+				# 0+: Object
+				if (0 <= $var3 && $var3 <= @ObjectSitStandable) {
+					my $objectID	= $ObjectSitStandable[$var3];
+					$destination	= 'sitting on '.nameObject($objectID);
+					#Record reference between task and object
+					push @{ $Objects[$objectID]{TaskReferences} },
+						{ id => $task,		type => 'TargetedBy'};
+					push @{ $Tasks[$task]{ObjectReferences} },
+						{ id => $objectID,	type => 'Targeting'};
+				}
+				#Log warning
+				print $File_Log "WARNING\tTask$task\tActionType=$type ($var1:$var2:$var3) unhandled object (v3)\n" unless 0 <= $var3 && $var3 <= @ObjectSitStandable;
 			}
 			# 5: Lying on
 			if ($var2 eq 5) {
-				my $objectID	= $ObjectLieable[$var3];
-				$destination	= 'lying on '.nameObject($objectID);
-				#Record reference between task and object
-				push @{ $Objects[$objectID]{TaskReferences} },
-					{ id => $task,		type => 'ActionedBy'};
-				push @{ $Tasks[$task]{ObjectReferences} },
-					{ id => $objectID,	type => 'Actioning'};
+				# 0+: Object
+				if (0 <= $var3 && $var3 <= @ObjectLieable) {
+					my $objectID	= $ObjectLieable[$var3];
+					$destination	= 'lying on '.nameObject($objectID);
+					#Record reference between task and object
+					push @{ $Objects[$objectID]{TaskReferences} },
+						{ id => $task,		type => 'TargetedBy'};
+					push @{ $Tasks[$task]{ObjectReferences} },
+						{ id => $objectID,	type => 'Targeting'};
+				}
+				#Log warning
+				print $File_Log "WARNING\tTask$task\tActionType=$type ($var1:$var2:$var3) unhandled object (v3)\n" unless 0 <= $var3 && $var3 <= @ObjectLieable;
 			}			
-			#Assemble the full text
+			#Assemble the full text and log warning
 			$text	= "Move $person $destination";
+			print $File_Log "WARNING\tTask$task\tActionType=$type ($var1:$var2:$var3) unhandled person (v1)\n" unless 0 <= $var1 && $var1 <= @Persons+1;
+			print $File_Log "WARNING\tTask$task\tActionType=$type ($var1:$var2:$var3) unhandled destination (v2)\n" unless 0 <= $var2 && $var2 <= 5;
 		}
 		#ObjectState:	ObjectID, State		TODO
 		if($type eq 2){
@@ -2171,21 +2228,23 @@ sub analyzeTask($){
 			my $object		= "UNKNOWN OBJECT $var1";
 			# 0: Referenced
 			$object			= 'referenced object'		if $var1 eq 0;
-			# 1+: Openable ObjectID
-			if ($var1 > 0 && $var1 <= @ObjectStateful) {
+			# 1+: Stateful ObjectID
+			if (1 <= $var1 && $var1 <= @ObjectStateful) {
 				my $objectID	= $ObjectStateful[$var1];
 				$object			= nameObject($objectID);
 				#Record reference between task and object
 				push @{ $Objects[$objectID]{TaskReferences} },
-					{ id => $task,		type => 'ActionedBy'};
+					{ id => $task,		type => 'AlteredBy'};
 				push @{ $Tasks[$task]{ObjectReferences} },
-					{ id => $objectID,	type => 'Actioning'};
+					{ id => $objectID,	type => 'Altering'};
 			}
 			#State
 			my $state		= "UNKNOWN STATE $var2";
 			#TODO VERIFY 0=open 1=closed?
-			#Assemble the full text
+			#Assemble the full text and log warnings
 			$text	= "Now $object is $state";
+			print $File_Log "WARNING\tTask$task\tActionType=$type ($var1:$var2) unhandled object (v1)\n" unless 0 <= $var1 && $var1 <= @ObjectStateful;
+			print $File_Log "WARNING\tTask$task\tActionType=$type ($var1:$var2) unhandled state (v2)\n";
 		}
 		#Variable:		VariableID, Operator, Min
 		if($type eq 3){
@@ -2198,20 +2257,23 @@ sub analyzeTask($){
 			my $variable	= "UNKNOWN VARIABLE $var1";
 			my $numeric		= 0;
 			# 0+: Variable
-			if ($var1 >= 0 && $var1 < @Variables) {
+			if (0 <= $var1 && $var1 <= @Variables-1) {
 				my $variableID	= $var1+1;
 				$variable		= nameVariable($variableID);
 				$numeric		= 1 if $Variables[$variableID]{Type} eq 0;
 				#Record reference between task and variable
 				push @{ $Variables[$variableID]{TaskReferences} },
-					{ id => $task,		type => 'ActionedBy'};
+					{ id => $task,		type => 'AlteredBy'};
 				push @{ $Tasks[$task]{VariableReferences} },
-					{ id => $variableID,	type => 'Actioning'};
+					{ id => $variableID,	type => 'Altering'};
 			}
+			#Log warning
+			print $File_Log "WARNING\tTask$task\tActionType=$type ($var1:$var2:$var3:$var5) unhandled variable (v1)\n" unless 0 <= $var1 && $var1 <= @Variables-1;
 			#Operator determines value
 			my $operator	= "UNKNOWN OPERATOR $var2";
 			my $value		= "UNKNOWN VALUE $var3:$var5:$expr";
-			if ($numeric) {	#Numeric variable
+			#Numeric variable
+			if ($numeric) {
 				# 0: assign
 				if ($var2 eq 0){
 					$operator	= 'to';
@@ -2241,9 +2303,13 @@ sub analyzeTask($){
 				if ($var2 eq 5){
 					$operator	= 'to';
 					$value		= $expr;
+#TODO: Evalue formula for variable references
 				}
+				#Log warning
+				print $File_Log "WARNING\tTask$task\tActionType=$type ($var1:$var2:$var3:$var5) unhandled operator (v2)\n" unless 0 <= $var2 && $var2 <=5;
 			}
-			else {			#String variable
+			#String variable
+			else {
 				# 0: assign
 				if ($var2 eq 0){
 					$operator	= 'to';
@@ -2258,13 +2324,17 @@ sub analyzeTask($){
 				if ($var2 eq 2){
 					$operator	= 'to';
 					$value		= "'$expr'";
+#TODO: Evalue formula for variable references
 				}
+				#Log warning
+				print $File_Log "WARNING\tTask$task\tActionType=$type ($var1:$var2:$var3:$var5) unhandled operator (v2)\n" unless 0 <= $var2 && $var2 <=2;
 			}
 			$text		= "Change $variable $operator $value";
 		}
 		#Score:			Modifier
 		if($type eq 4){
-			$text			= "Modify score by $action{Var1}";
+			my $var1	= $action{Var1};
+			$text		= "Modify score by $var1";
 		}
 		#Task:			Direction, Task
 		if($type eq 5){
@@ -2279,16 +2349,19 @@ sub analyzeTask($){
 			#Task
 			my $executable	= "UNKNOWN TASK $var2";
 			#0+: Task ID
-			if ($var2 >= 0 && $var2 < @Tasks) {
-				my $taskID	= $var2 + 1;
+			if (0 <= $var2 && $var2 <= @Tasks - 1) {
+				my $taskID	= $var2+1;
 				$executable	= nameTask($taskID);
 				#Record reference between task and task
 				push @{ $Tasks[$taskID]{TaskReferences} },
-					{ id => $task,		type => 'ActionedBy'};
+					{ id => $task,		type => 'ExecutedBy'};
 				push @{ $Tasks[$task]{TaskReferences} },
-					{ id => $taskID,	type => 'Actioning'};
+					{ id => $taskID,	type => 'Executing'};
 			}
+			#Assemble the full text and log warning
 			$text		= "$direction $executable";
+			print $File_Log "WARNING\tTask$task\tRestrictionType=$type ($var1:$var2) unhandled direction (v1)\n" unless 0 <= $var1 && $var1 <= 1;
+			print $File_Log "WARNING\tTask$task\tRestrictionType=$type ($var1:$var2) unhandled task (v2)\n" unless 0 <= $var2 && $var2 <= @Tasks-1;
 		}
 		#End Game:		Ending
 		if($type eq 6){
@@ -2302,22 +2375,27 @@ sub analyzeTask($){
 			$ending		= 'failure'	if $var1 eq 1;
 			# 2: Death
 			$ending		= 'death'	if $var1 eq 2;
-			#Assemble final text
+			#Assemble the full text and log warning
 			$text		= "End the game in $ending";
+			print $File_Log "WARNING\tTask$task\tRestrictionType=$type ($var1:$var2) unhandled ending (v1)\n" unless 0 <= $var1 && $var1 <= 2;
+			print $File_Log "WARNING\tTask$task\tRestrictionType=$type ($var1:$var2) unhandled ending (v2)\n";
 		}
 		#Battle:		TODO
 		if($type eq 7){
 			my $var1	= $action{Var1};
 			my $var2	= $action{Var2};
 			my $var3	= $action{Var3};
-			#Assemble final text
+			#Assemble the full text and log warning
 			$text		= "UNKNOWN BATTLE $var1 $var2 $var3";
+			print $File_Log "WARNING\tTask$task\tRestrictionType=$type ($var1:$var2:$var3) unhandled battle\n";
 		}
 		$Tasks[$task]{Actions}[$id]{Text}	= $text if defined $text;
 	}
 	#TODO Classify task by interpreting task name or commands
 }	
 sub analyzeEvent($){
+	#TODO: Analyze texts for references to variables and ALRs
+	#TODO: Add location references
 	my $event			= shift;
 	{	#Start Condition
 		my $type	= $Events[$event]{StarterType};
@@ -2596,7 +2674,6 @@ sub analyzeEvent($){
 		$Events[$event]{EndExecute}	= $execute;
 		print $File_Log "WARNING\tEvent$event\tTaskAffected=$taskID unhandled\n" unless 0 <= $taskID && $taskID <= @Tasks;
 	}
-	#TODO: Analyze texts for references to variables and ALRs
 }
 ##Generate output
 sub generate(){
@@ -3197,7 +3274,7 @@ sub generateXMLEvents(){
 			writeXMLElement('ID',			$event);
 			writeXMLElement('SymbolicName',	nameEvent($event));
 			writeXMLElement('ShortName',	$Events[$event]{Short});
-			writeXMLElement('Type',			$Events[$event]{Restart});
+			writeXMLElement('Type',			$Events[$event]{Type});
 			writeXMLElementClose('Properties');
 		}
 		{	#Starting
