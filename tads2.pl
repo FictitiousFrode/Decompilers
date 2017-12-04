@@ -8,7 +8,7 @@ use Carp;					# For stack tracing at errors
 my $Time_Start	= time();	# Epoch time for start of processing
 
 ##Version History
-my $Decompiler_Version		= '0.10d';
+my $Decompiler_Version		= '0.10e';
 #v0.1:	Initial structure for flow and storage
 #v0.2:	Parsing of data blocks (Headers + XSI/OBJ/RES)
 #v0.3:	Generation and parsing of symbol file
@@ -23,6 +23,7 @@ my $Decompiler_Version		= '0.10d';
 #v0.10b	Improved branching (while break)
 #v0.10c Escape codes for strings, assignment operator bug, string concatenation
 #v0.10d Bugfix for unencrypted files; addes support for OPCLINE
+#v0.10e	Improved switch handling
 
 ##Global variables##
 #File handling
@@ -534,6 +535,8 @@ sub parseMapping() {
 	while ($line = <$File_Mapping>) {
 		#Pre-process the line
 		chomp $line;
+#		$line	= (split('#', $line))[0];		# Remove comments
+#		next if($line =~ m/\^s*$/i );			# Skip lines with only whitespace
 		next if $line eq '';					# Skip empty lines
 		next if (substr($line, 0, 1) eq '#');	# Skip full-line comments
 		$line	= (split('#', $line))[0];		# Remove comments
@@ -1549,10 +1552,15 @@ sub analyzeOpcode($$$) {
 					$switch_op{target}	= $subpos + unpack('s', substr($codeblock, $subpos, 2));
 					$subpos+=2;
 					push @operand, \%switch_op;
+#					print $File_Log	"\t\t\tCase$entry @ $switch_op{target}: $switch_op{opcode} - $Constant_Opcode[$switch_op{opcode}] "	if $Option_Verbose;
+					print $File_Log	"\t\t\tCase @ $switch_op{target}: "	if $Option_Verbose;
+					print $File_Log	arrayString($switch_op{operand})	if $Option_Verbose;
+					print $File_Log	"\n"								if $Option_Verbose;
 				}
 				$instruction{switch_default}	= $subpos + unpack('s', substr($codeblock, $subpos, 2));
 				$subpos+=2;
 				$instruction{switch_end}	= $subpos;
+				print $File_Log	"\t\t\tDefault @ $instruction{switch_default}\n"	if $Option_Verbose;
 			}
 			elsif ($template eq 'UNKNOWN2') {
 				#Operand of known size but unknown function; skipped
@@ -2665,9 +2673,9 @@ sub printInstructions($){
 			push @endpoints, $table_end;
 			@endpoints = sort {$a <=> $b} @endpoints;
 			for (my $case=0 ; $case<=$#switch_cases ; $case++){
-				for (my $end=0 ; $end<$#endpoints ; $end++){
-					if ($endpoints[$end] eq $switch_cases[$case]{start}){
-						$switch_cases[$case]{end}	= $endpoints[$end+1];
+				for (my $ending=0 ; $ending<$#endpoints ; $ending++){
+					if ($endpoints[$ending] eq $switch_cases[$case]{start}){
+						$switch_cases[$case]{end}	= $endpoints[$ending+1];
 						last;
 					}
 				}
@@ -2688,6 +2696,7 @@ sub printInstructions($){
 				case	=> 0
 			};
 			#Start the first case; Changes between cases is handled by the end of branch code.
+			warn "ERROR: Case-less switch at $print_id" unless defined $switch_cases[0]{start};
 			print $File_Log "\t\tCASE-start at $pos/$label, $switch_cases[0]{start}-$switch_cases[0]{end}\n"	if $Option_Verbose;
 			push @lines, {
 				text	=> "case $switch_cases[0]{text}:",
@@ -2699,8 +2708,8 @@ sub printInstructions($){
 				start	=> $switch_cases[0]{start},
 				end		=> $switch_cases[0]{end}
 			};
-			$label		= $switch_cases[0]{start};
-			$label_updated = 1;
+			$next_label		= $switch_cases[0]{start};
+			$label_updated	= 1;
 		}
 		#Unhandled opcodes
 		else{
@@ -2750,10 +2759,10 @@ sub printInstructions($){
 				my $next_pos;
 				#See if there are more cases
 				if ($next_case <= $#cases) {
+#				if ($next_case <= $#cases && not $cases[$#cases]{start} eq $cases[$#cases]{end}) {
 					my $start	= $cases[$next_case]{start};
 					my $end		= $cases[$next_case]{end};
 					print $File_Log "\t\tCASE-start at $pos/$label, $start-$end\n"	if $Option_Verbose;
-					$label	= $cases[$next_case]{start};
 					$branching[$#branching]{case}++;
 					#Write case line
 					push @lines, {
@@ -2768,6 +2777,8 @@ sub printInstructions($){
 						end		=> $end
 					};
 					$next_pos	= $start;
+					$next_label	= $cases[$next_case]{start};
+					$label_updated++;
 				}
 				else {
 					#No more cases, close out the switch
@@ -2779,15 +2790,13 @@ sub printInstructions($){
 						label	=> $label,
 						indent	=> $#branching
 					};
-					$label	= $next_pos;
+					$next_label	= $next_pos;
 					$label_updated++;
 				}
 				#Find the right instruction to continue at
-#				print "$print_id from $instruction ";
 				for (my $i=0 ; $i<=$#instructions ; $i++){
 					$instruction = $i-1 if $instructions[$i]{pos} eq $next_pos;
 				}
-#				print "to $instruction\n";
 			}
 			elsif ($branch_type eq 'IF' || $branch_type eq 'ELSIF'){
 				my $start	= $branching[$#branching]{start};
@@ -2816,8 +2825,11 @@ sub printInstructions($){
 				warn "$message for $print_id";
 				pop @branching;
 			}
+			#Update branch end
 			undef $branch_end;
 			$branch_end		= $branching[$#branching]{end}	unless $#branching eq -1;
+			#Update label if needed
+			$label		= $next_label if $update_label && not $label_updated;
 		}
 		#Check for fatal errors
 		if(defined $fatal){
