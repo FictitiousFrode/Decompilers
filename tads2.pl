@@ -20,6 +20,7 @@ my $Decompiler_Version		= '0.11';
 #v0.9:	Minor tweaks
 #v0.10:	Various bugfixes
 #v0.11:	New template
+#v0.11a	Fixed string concatenation and empty switches
 
 ##Global Variables
 #Story Settings
@@ -2009,7 +2010,7 @@ sub generateCode($){
 				$text	= '"' . $1;
 				my $nextline = $line +1;
 				#Ensure are no intervening labels and everything is on the same indentation
-				while($nextline < $#VM_Lines && $VM_Lines[$nextline]{indent} eq $indent && not $VM_Lines[$nextline]{print_label}){
+				while($nextline <= $#VM_Lines && $VM_Lines[$nextline]{indent} eq $indent && not $VM_Lines[$nextline]{print_label}){
 					if ($VM_Lines[$nextline]{text} =~ m/^"(.*)";$/m){
 						$text	.= $1;
 						$nextline++;
@@ -2032,7 +2033,6 @@ sub generateCode($){
 		print $File_Decompiled "\t"				if $mode_prop;
 		print $File_Decompiled "}\n";
 	}
-#	die if $id eq -4;
 }
 ##Virtual Machine Simulator
 sub VMinit(){
@@ -2160,7 +2160,7 @@ sub VMexecute($;$){
 			}
 		}
 		#Perform the assignment based on destination
-		if ($discard)	{ VMprint($assignment) }				#Treat as discard opcode; add to lines
+		if ($discard)	{ VMprint("$assignment;") }				#Treat as discard opcode; add to lines
 		else			{ VMstackPush($assignment,$precedence) }#Push back on stack
 		return;
 	}
@@ -2815,10 +2815,10 @@ sub VMexecute($;$){
 				my ($expr)	= VMstackPop();
 				my ($call)	= VMstackPop();
 				#The second argument is the object to call on, which is usually nil
-				$line		= "\"<< $expr >>\";"			if $call eq 'nil';
-				$line		= "\"<< $call.$expr >>\";"	unless $call eq 'nil';
+				$line		= "\"<< $expr >>\""			if $call eq 'nil';
+				$line		= "\"<< $call.$expr >>\""	unless $call eq 'nil';
 				#'Print' the substituted line as we discard the value
-				VMprint($line);
+				VMprint("$line;");
 			}
 			else{
 				#Extract arguments from stack
@@ -2840,13 +2840,13 @@ sub VMexecute($;$){
 			#Discard the top element of the stack, which implies a print
 			my ($line)		= VMstackPop();
 			#'Print' the line
-			VMprint($line)	unless $line eq 'nil';
+			VMprint("$line;")	unless $line eq 'nil';
 			return;
 		}
 		if	($opcode eq 0x1D) {	# OPCSAY			29
 			#Say the string in operand
 			my $text	= shift @operand;
-			VMprint($text);
+			VMprint("$text;");
 			return;
 		}
 		if	($opcode eq 0x29) {	# OPCPASS			41
@@ -2880,10 +2880,10 @@ sub VMexecute($;$){
 	{	#Branch manipulation
 		if	($opcode eq 0x16) {	# OPCRETURN			22
 			#Return from function without any value
-			my $line	= 'return;';
+			my $line	= 'return';
 			my ($type, $start, $end)	= VMbranchGet();
 			#'Print' the line, Suppress valueless returns that terminate the main loop
-			VMprint($line)	unless $type eq 'MAIN';
+			VMprint("$line;")	unless $type eq 'MAIN';
 			#Terminate processing when returning from main branch; other branches are handled in post processing
 			VMbranchEnd()		if $type eq 'MAIN';
 			#Log branch manipulation for debugging
@@ -3121,6 +3121,11 @@ sub VMexecute($;$){
 					$next_start		= $switch_cases[$case+1]{start} unless $case eq $#switch_cases;
 					$switch_cases[$case]{end}	= $next_start;
 				}
+			}
+			#TADS *will* compile games without any cases
+			if ($#switch_cases eq -1) {
+				print $File_Log "SWITCH(EMPTY)\t$location ($table_start-$table_end)\n"					if $Option_Verbose;
+				return;
 			}
 			#'Print' the switch statement
 			VMprint("switch ($statement) {");
