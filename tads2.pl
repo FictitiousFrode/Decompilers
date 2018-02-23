@@ -2966,7 +2966,8 @@ sub VMexecute($;$){
 			elsif ($type eq 'ELSIF' && $end eq $destination){								# ELSIF-ELSE
 				$jump_type	= 'ELSIF(ELSE)';
 				#'Print' an else on the next level down; this can be appended by an IF (0x1B) as next opcode
-				VMprint('} else {;', -1);
+				VMprint('}', -1);
+				VMprint('else {', -1);
 			}
 			else {																			# GOTO
 				$jump_type	= 'GOTO(JMP)';
