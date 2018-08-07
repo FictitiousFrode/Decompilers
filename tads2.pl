@@ -21,6 +21,7 @@ my $Decompiler_Version		= '0.11';
 #v0.10:	Various bugfixes
 #v0.11:	New template
 #v0.11a	Fixed string concatenation and empty switches
+#v0.11b	Fixed a shift in all preloaded argument names
 
 ##Global Variables
 #Story Settings
@@ -159,10 +160,8 @@ sub parseArguments() {
 		else{ last }
 	}
 }
-#Open file handles
 sub openFiles() {
-	#Determine filenames to use
-	#Create path as needed
+	#Open file handles; Create path as needed
 	mkdir $FileName_Path						unless -e $FileName_Path;
 	die "$FileName_Path is not a valid path"	unless -d $FileName_Path;
 	#Open log; use :unix to flush as we write to it
@@ -229,51 +228,51 @@ sub loadConstants() {
 		$Symbol_Property[8]		= 'sdesc';
 		$Symbol_Property[9]		= 'thedesc';
 		$Symbol_Property[10]	= 'doDefault';
-		$Symbol_Property_Argument[10] = ['actor', 'prep', 'iobj'];
+		$Symbol_Property_Argument[10] = [undef, 'actor', 'prep', 'iobj'];
 		$Symbol_Property[11]	= 'ioDefault';
-		$Symbol_Property_Argument[11] = ['actor', 'prep'];
+		$Symbol_Property_Argument[11] = [undef, 'actor', 'prep'];
 		$Symbol_Property[12]	= 'ioAction';
 		$Symbol_Property[13]	= 'location';
 		$Symbol_Property[14]	= 'value';
 		$Symbol_Property[15]	= 'roomAction';
-		$Symbol_Property_Argument[15] = ['actor', 'verb', 'dobj', 'prep', 'iobj'];
+		$Symbol_Property_Argument[15] = [undef, 'actor', 'verb', 'dobj', 'prep', 'iobj'];
 		$Symbol_Property[16]	= 'actorAction';
-		$Symbol_Property_Argument[16] = ['verb', 'dobj', 'prep', 'iobj'];
+		$Symbol_Property_Argument[16] = [undef, 'verb', 'dobj', 'prep', 'iobj'];
 		$Symbol_Property[17]	= 'contents';
 		$Symbol_Property[18]	= 'tpl';
 		$Symbol_Property[19]	= 'prepDefault';
 		$Symbol_Property[20]	= 'verActor';
 		$Symbol_Property[21]	= 'validDo';
-		$Symbol_Property_Argument[21] = ['actor', 'obj', 'seqno'];
+		$Symbol_Property_Argument[21] = [undef, 'actor', 'obj', 'seqno'];
 		$Symbol_Property[22]	= 'validIo';
-		$Symbol_Property_Argument[22] = ['actor', 'obj', 'seqno'];
+		$Symbol_Property_Argument[22] = [undef, 'actor', 'obj', 'seqno'];
 		$Symbol_Property[23]	= 'lookAround';
-		$Symbol_Property_Argument[23] = ['verbosity'];
+		$Symbol_Property_Argument[23] = [undef, 'verbosity'];
 		$Symbol_Property[24]	= 'roomCheck';
-		$Symbol_Property_Argument[24] = ['verb'];
+		$Symbol_Property_Argument[24] = [undef, 'verb'];
 		$Symbol_Property[25]	= 'statusLine';
 		$Symbol_Property[26]	= 'locationOK';
 		$Symbol_Property[27]	= 'isVisible';
-		$Symbol_Property_Argument[27] = ['vantage'];
+		$Symbol_Property_Argument[27] = [undef, 'vantage'];
 		$Symbol_Property[28]	= 'cantReach';
-		$Symbol_Property_Argument[28] = ['actor', 'dolist', 'iolist', 'prep'];
+		$Symbol_Property_Argument[28] = [undef, 'actor', 'dolist', 'iolist', 'prep'];
 		$Symbol_Property[29]	= 'isHim';
 		$Symbol_Property[30]	= 'isHer';
 		$Symbol_Property[31]	= 'action';
-		$Symbol_Property_Argument[31] = ['actor'];
+		$Symbol_Property_Argument[31] = [undef, 'actor'];
 		$Symbol_Property[32]	= 'validDoList';
-		$Symbol_Property_Argument[32] = ['actor', 'prep', 'iobj'];
+		$Symbol_Property_Argument[32] = [undef, 'actor', 'prep', 'iobj'];
 		$Symbol_Property[33]	= 'validIoList';
-		$Symbol_Property_Argument[33] = ['actor', 'prep', 'dobj'];
+		$Symbol_Property_Argument[33] = [undef, 'actor', 'prep', 'dobj'];
 		$Symbol_Property[34]	= 'iobjGen';
-		$Symbol_Property_Argument[34] = ['actor', 'verb', 'dobj', 'prep'];
+		$Symbol_Property_Argument[34] = [undef, 'actor', 'verb', 'dobj', 'prep'];
 		$Symbol_Property[35]	= 'dobjGen';
-		$Symbol_Property_Argument[35] = ['actor', 'verb', 'iobj', 'prep'];
+		$Symbol_Property_Argument[35] = [undef, 'actor', 'verb', 'iobj', 'prep'];
 		$Symbol_Property[36]	= 'nilPrep';
 		$Symbol_Property[37]	= 'rejectMultiDobj';
-		$Symbol_Property_Argument[37] = ['prep'];
+		$Symbol_Property_Argument[37] = [undef, 'prep'];
 		$Symbol_Property[38]	= 'moveInto';
-		$Symbol_Property_Argument[38] = ['dest'];
+		$Symbol_Property_Argument[38] = [undef, 'dest'];
 		$Symbol_Property[39]	= 'construct';
 		$Symbol_Property[40]	= 'destruct';
 		$Symbol_Property[41]	= 'validActor';
@@ -283,26 +282,26 @@ sub loadConstants() {
 		$Symbol_Property[45]	= 'multisdesc';
 		$Symbol_Property[46]	= 'tpl2';
 		$Symbol_Property[47]	= 'anyvalue';
-		$Symbol_Property_Argument[47] = ['num'];
+		$Symbol_Property_Argument[47] = [undef, 'num'];
 		$Symbol_Property[48]	= 'newNumbered';
-		$Symbol_Property_Argument[48] = ['actor', 'verb', 'num'];
+		$Symbol_Property_Argument[48] = [undef, 'actor', 'verb', 'num'];
 	#	$Symbol_Property[49]	= 'unknown';
 		$Symbol_Property[50]	= 'parseUnknownDobj';
-		$Symbol_Property_Argument[50] = ['actor', 'prep', 'iobj', 'wordlist'];
+		$Symbol_Property_Argument[50] = [undef, 'actor', 'prep', 'iobj', 'wordlist'];
 		$Symbol_Property[51]	= 'parseUnknownIobj';
-		$Symbol_Property_Argument[51] = ['actor', 'prep', 'iobj', 'wordlist'];
+		$Symbol_Property_Argument[51] = [undef, 'actor', 'prep', 'iobj', 'wordlist'];
 		$Symbol_Property[52]	= 'dobjCheck';
-		$Symbol_Property_Argument[52] = ['actor', 'prep', 'iobj', 'prep'];
+		$Symbol_Property_Argument[52] = [undef, 'actor', 'prep', 'iobj', 'prep'];
 		$Symbol_Property[53]	= 'iobjCheck';
-		$Symbol_Property_Argument[53] = ['actor', 'prep', 'iobj', 'prep'];
+		$Symbol_Property_Argument[53] = [undef, 'actor', 'prep', 'iobj', 'prep'];
 		$Symbol_Property[54]	= 'verbAction';
-		$Symbol_Property_Argument[54] = ['actor', 'dobj', 'prep', 'iobj'];
+		$Symbol_Property_Argument[54] = [undef, 'actor', 'dobj', 'prep', 'iobj'];
 		$Symbol_Property[55]	= 'disambigDobj';
-		$Symbol_Property_Argument[55] = ['actor', 'prep', 'iobj', 'verprop', 'wordlist', 'objlist', 'flaglist', 'numberWanted', 'isAmbiguous', 'silent'];
+		$Symbol_Property_Argument[55] = [undef, 'actor', 'prep', 'iobj', 'verprop', 'wordlist', 'objlist', 'flaglist', 'numberWanted', 'isAmbiguous', 'silent'];
 		$Symbol_Property[56]	= 'disambigIobj';
-		$Symbol_Property_Argument[56] = ['actor', 'prep', 'dobj', 'verprop', 'wordlist', 'objlist', 'flaglist', 'numberWanted', 'isAmbiguous', 'silent'];
+		$Symbol_Property_Argument[56] = [undef, 'actor', 'prep', 'dobj', 'verprop', 'wordlist', 'objlist', 'flaglist', 'numberWanted', 'isAmbiguous', 'silent'];
 		$Symbol_Property[57]	= 'prefixdesc';
-		$Symbol_Property_Argument[57] = ['show', 'current_index', 'count', 'multi_flags'];
+		$Symbol_Property_Argument[57] = [undef, 'show', 'current_index', 'count', 'multi_flags'];
 		$Symbol_Property[58]	= 'isThem';
 	}
 	{	#Builtin functions; sourced from detads by Daniel Schepler
@@ -903,7 +902,7 @@ sub parseREQ($) {
 			$actual++;
 			{	#Update names for object, logging any changes
 				my $rename = 1;
-				undef $rename unless defined $Symbol_Object[$obj] && $Symbol_Object[$obj] != $obj_names[$entry];
+				undef $rename unless defined $Symbol_Object[$obj] && not $Symbol_Object[$obj] eq $obj_names[$entry];
 				if (defined $rename){
 					print $File_Log "INFO\tObj$obj renamed to $obj_names[$entry]\n";
 					$Symbol_Object[$obj]	= $obj_names[$entry];
@@ -1148,7 +1147,7 @@ sub analyzeActions() {
 					#Rename property and arguments, update property-action mapping
 					$Property_Actions{$ver_io_prop}	= $action	unless defined $Property_Actions{$ver_io_prop};
 					$Symbol_Property[$ver_io_prop]	= $name		unless defined $Symbol_Property[$ver_io_prop];
-					@{ $Symbol_Property_Argument[$ver_io_prop] }	= ('actor');
+					@{ $Symbol_Property_Argument[$ver_io_prop] }	= (undef, 'actor');
 					#Check if updates took hold
 					my $skipped						= 1;
 					my $unmapped					= 1;
@@ -1172,7 +1171,7 @@ sub analyzeActions() {
 					#Rename property and arguments, update property-action mapping
 					$Property_Actions{$exc_io_prop}	= $action	unless defined $Property_Actions{$exc_io_prop};
 					$Symbol_Property[$exc_io_prop]	= $name		unless defined $Symbol_Property[$exc_io_prop];
-					@{ $Symbol_Property_Argument[$exc_io_prop] }	= ('actor', 'dobj');
+					@{ $Symbol_Property_Argument[$exc_io_prop] }	= (undef, 'actor', 'dobj');
 					#Check if updates took hold
 					my $skipped						= 1;
 					my $unmapped					= 1;
@@ -1196,8 +1195,8 @@ sub analyzeActions() {
 					#Rename property and arguments, update property-action mapping
 					$Property_Actions{$ver_do_prop}	= $action	unless defined $Property_Actions{$ver_do_prop};
 					$Symbol_Property[$ver_do_prop]	= $name		unless defined $Symbol_Property[$ver_do_prop];
-					@{ $Symbol_Property_Argument[$ver_do_prop] }	= ('actor', 'iobj')	if ($exc_io_prop);
-					@{ $Symbol_Property_Argument[$ver_do_prop] }	= ('actor')		unless ($exc_io_prop);
+					@{ $Symbol_Property_Argument[$ver_do_prop] }	= (undef, 'actor', 'iobj')	if ($exc_io_prop);
+					@{ $Symbol_Property_Argument[$ver_do_prop] }	= (undef, 'actor')		unless ($exc_io_prop);
 					#Check if updates took hold
 					my $skipped						= 1;
 					my $unmapped					= 1;
@@ -1221,8 +1220,8 @@ sub analyzeActions() {
 					#Rename property and arguments, update property-action mapping
 					$Property_Actions{$exc_do_prop}	= $action	unless defined $Property_Actions{$exc_do_prop};
 					$Symbol_Property[$exc_do_prop]	= $name		unless defined $Symbol_Property[$exc_do_prop];
-					@{ $Symbol_Property_Argument[$exc_do_prop] }	= ('actor', 'iobj')	if ($exc_io_prop);
-					@{ $Symbol_Property_Argument[$exc_do_prop] }	= ('actor')		unless ($exc_io_prop);
+					@{ $Symbol_Property_Argument[$exc_do_prop] }	= (undef, 'actor', 'iobj')	if ($exc_io_prop);
+					@{ $Symbol_Property_Argument[$exc_do_prop] }	= (undef, 'actor')		unless ($exc_io_prop);
 					#Check if updates took hold
 					my $skipped						= 1;
 					my $unmapped					= 1;
@@ -1423,17 +1422,16 @@ sub analyzeOpcode($$$) {
 	my $pos			= shift;
 	my $length		= length($codeblock);
 	#Read in opcode and assemble the instruction
-	my $opcode		= ord(substr($codeblock, $pos));
+	my $opcode		= unpack('C', substr($codeblock, $pos));
 	my $size		= 1;	# The size of the current instruction including embedded operand
 	my @operand		= ();
 	my %instruction	= ();
-	$instruction{pos}		= $pos;
-	$instruction{opcode}	= $opcode;
-	$instruction{name}		= $Constant_Opcode[$opcode];
 	#Opcodes 192 and above are reserved for assignment, which is handled in a special way
 	if ($opcode < 192) {
+		$instruction{name}		= $Constant_Opcode[$opcode];
 		my @templates	= ();
-		@templates		= @{ $Constant_Opcode_Operand[$opcode] } if defined $Constant_Opcode_Operand[$opcode];
+		@templates		= @{ $Constant_Opcode_Operand[$opcode] }	if defined $Constant_Opcode_Operand[$opcode];
+#		die "Unknown operand template for opcode $opcode"			if $opcode != 0 and $#templates eq -1;
 		foreach my $template (@templates) {
 			#Some tads compilations contain unused "junk code" which is never run; If we find unknown opcodes we have to stop gracefully
 			if	  ($template eq 'UNKNOWN') {
@@ -1458,7 +1456,7 @@ sub analyzeOpcode($$$) {
 			elsif ($template eq 'UINT8') {
 				#Number embedded as UINT8
 				my $value	= 'UNKNOWN-UINT8';
-				$value		= ord(substr($codeblock, $pos + $size, 1))					if ($pos + $size + 1) < $length;
+				$value		= unpack('C', substr($codeblock, $pos + $size, 1))			if ($pos + $size + 1) < $length;
 				$size++;
 				push @operand, $value;
 			}
@@ -1507,8 +1505,10 @@ sub analyzeOpcode($$$) {
 			elsif ($template eq 'OFFSET') {
 				#Address in code block, stored as relative location in INT16
 				my $value	= 'UNKNOWN-OFFSET';
-				$value		= unpack('s', substr($codeblock, $pos + $size, 2))	if ($pos + $size + 2) < $length;
-				$value		+= $pos + $size 									if ($pos + $size + 2) < $length;
+				if (($pos + $size + 2) < $length) {
+					$value		= unpack('s', substr($codeblock, $pos + $size, 2));
+					$value		+= $pos + $size;
+				}
 				$size		+= 2;
 				push @operand, $value;
 			}
@@ -1587,8 +1587,8 @@ sub analyzeOpcode($$$) {
 			}
 		}
 	}
+	#Assignment opcodes are handled as a bitflag
 	else {
-		#Assignment opcodes are handled as a bitflag
 		if    (($opcode & 0x03) eq 0x00){
 			#Local ID embedded as INT16
 			my $value	= nameVariable($id, unpack('s', substr($codeblock, $pos + $size, 2)));
@@ -1607,14 +1607,10 @@ sub analyzeOpcode($$$) {
 			$size++;
 			push @operand, $value;
 		}
-		return {
-			pos		=> $pos,
-			opcode	=> $opcode,
-			size	=> $size,
-			operand	=> \@operand
-		};
 	}
-	$instruction{size}		= $size,
+	$instruction{pos}		= $pos;
+	$instruction{opcode}	= $opcode;
+	$instruction{size}		= $size;
 	$instruction{operand}	= \@operand;
 	return \%instruction;
 }
@@ -1669,7 +1665,7 @@ sub generateOBJFunc($){
 	my $obj	= shift;
 	print $File_Log "\tObj$obj: Function\n"	if $Option_Verbose;
 	#Include symbol mapping
-	print $File_Decompiled	"\n//\tObj$obj\t = '".nameObject($obj)."'\n";
+	print $File_Decompiled	"\n//\tObj$obj\t= '".nameObject($obj)."'\n";
 	#Print the instructions, which include the function header
 	generateCode(-$obj, $Objects[$obj]{instructions});
 
@@ -1683,14 +1679,14 @@ sub generateOBJMeta($){
 	print $File_Log "\tObj$obj: Meta\n"	if $Option_Verbose;
 	undef $header_needed						if $Option_Verbose;
 	#Object header including symbol mapping
-	print $File_Decompiled	"\n//\tObj$obj\t = '".nameObject($obj)."'\n";
+	print $File_Decompiled	"\n//\tObj$obj\t= '".nameObject($obj)."'\n";
 	print $File_Decompiled 'class ' if $Objects[$obj]{flags}{isClass};
 	print $File_Decompiled nameObject($obj) . ': ';
 	if (defined $Objects[$obj]{superclass}) {
 		my @parents	= @{ $Objects[$obj]{superclass} };
-		for my $i (0 .. $#parents) {
-			print $File_Decompiled ', ' if $i > 0;
-			print $File_Decompiled nameObject($parents[$i]);
+		foreach my $parent (0 .. $#parents) {
+			print $File_Decompiled ', ' if $parent > 0;
+			print $File_Decompiled nameObject($parents[$parent]);
 		}
 		print $File_Decompiled "\n";
 	}
@@ -1973,7 +1969,7 @@ sub generateCode($){
 		my $arguments = '';
 		if ($VM_Arguments){
 			$arguments		= '(';
-			foreach my $arg (1 .. $VM_Arguments) {
+			foreach my $arg (1 .. $VM_Arguments & 127) {
 				$arguments	.= ', '	if $arg > 1;
 				$arguments	.= nameVariable($id, -$arg);
 			}
@@ -2880,10 +2876,9 @@ sub VMexecute($;$){
 	{	#Branch manipulation
 		if	($opcode eq 0x16) {	# OPCRETURN			22
 			#Return from function without any value
-			my $line	= 'return';
 			my ($type, $start, $end)	= VMbranchGet();
 			#'Print' the line, Suppress valueless returns that terminate the main loop
-			VMprint("$line;")	unless $type eq 'MAIN';
+			VMprint('return;')	unless $type eq 'MAIN';
 			#Terminate processing when returning from main branch; other branches are handled in post processing
 			VMbranchEnd()		if $type eq 'MAIN';
 			#Log branch manipulation for debugging
@@ -3346,9 +3341,9 @@ sub decodeProperty($$) {
 			$pos 	+= $entry_size;
 			push @entries, decodeProperty($entry_type, $entry_data);
 		}
-		{	#Convert the list to a scalar context, with creative use of quotes
-			local $" = '", "';
-			$text = "[\"@entries\"]";
+		{	#Convert the list to a scalar context
+			local $" = ', ';
+			$text = "[@entries]";
 		}
 	}
 	return $text;
@@ -3404,19 +3399,19 @@ sub nameObject($) {
 	return 'UnknownObject'			unless defined $id;
 	return 'nullObj'				if $id eq $Null_Value;
 	return $Symbol_Object[$id]		if defined $Symbol_Object[$id];
-	return "Object$id";
+	return "Obj$id";
 }
 sub nameProperty($) {
 	my $id	= shift;
 	return 'UnknownProperty'		unless defined $id;
 	return $Symbol_Property[$id]	if defined $Symbol_Property[$id];
-	return "Property$id";
+	return "prop$id";
 }
 sub namePropertyType($) {
 	my $id	= shift;
 	return 'UnknownPropertyType'			unless defined $id;
 	return $Constant_Property_Type[$id]	if defined $Constant_Property_Type[$id];
-	return "PropertyType$id";
+	return "PropType$id";
 }
 sub nameVariable($$) {
 	#Variable names are split on property/object and argument/local
