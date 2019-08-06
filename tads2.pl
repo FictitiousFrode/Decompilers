@@ -8,7 +8,7 @@ use Carp;					# For stack tracing at errors
 
 my $Time_Start	= time();	# Epoch time for start of processing
 ##Version History
-my $Decompiler_Version		= '0.12a';
+my $Decompiler_Version		= '0.12';
 #v0.1:	Initial structure for flow and storage
 #v0.2:	Parsing of data blocks (Headers + XSI/OBJ/RES)
 #v0.3:	Generation and parsing of symbol file
@@ -24,6 +24,7 @@ my $Decompiler_Version		= '0.12a';
 #v0.11b	Fixed a shift in all preloaded argument names
 #v0.11c	Improved symbol loading
 #v0.12a	Fixed proper headers and rewrote symbol handling for methods and functions
+#v0.12b	Fixed argument-less method calls
 
 ##Global Variables
 #Story Settings
@@ -1692,13 +1693,13 @@ sub analyzeOpcode($$$) {
 	#Assignment opcodes are handled as a bitflag
 	else {
 		if    (($opcode & 0x03) == 0x00) {
-			#Local ID embedded as INT16
+			#Local var embedded as INT16
 			my $value	= nameVariable($id, unpack('s', substr($codeblock, $pos + $size, 2)));
 			$size+=2;
 			push @operand, $value;
 		}
 		elsif (($opcode & 0x03) == 0x01) {
-			#Object ID embedded as INT16
+			#Property embedded as INT16, to be applied to object on stack
 			my $value	= nameProperty(unpack('s', substr($codeblock, $pos + $size, 2)));
 			$size+=2;
 			push @operand, $value;
@@ -2198,7 +2199,7 @@ sub VMexecute($;$) {
 				my ($object, $prec)		= VMstackPop();
 				$object					= "($object)" if $prec < 13;
 				#Assemble variable
-				$variable				=	"$object.$property";
+				$variable				= "$object.$property";
 			}
 			elsif	($variable_mask == 0x02) {
 				#Index from stack applied to list from stack
@@ -2646,7 +2647,7 @@ sub VMexecute($;$) {
 			#Assemble list
 			my $list		= '[';
 			foreach my $elm (0..$element_count) {
-				$list			.= ', '		if $elm > 0;
+				$list			.= ' '		if $elm > 0;	# NOTE: TADS does not use a list separator
 				#Retrieve element from stack
 				my ($element)	= VMstackPop();
 				$list			.= $element;
@@ -2664,13 +2665,7 @@ sub VMexecute($;$) {
 			my $argument_count	= shift @operand;
 			my $function		= shift @operand;
 			#Extract arguments from stack
-			my $arguments	= '(';
-			foreach my $arg (1..$argument_count) {
-				$arguments		.= ', '		if $arg > 1;
-				my ($argument)	= VMstackPop();
-				$arguments		.= $argument;
-			}
-			$arguments		.= ')';
+			my $arguments	= VMstackArguments($argument_count);
 			#Push assembled function call with arguments back to stack
 			VMstackPush("$function$arguments", $precedence);
 			return;
@@ -2682,13 +2677,7 @@ sub VMexecute($;$) {
 			my $property		= shift @operand;
 			my ($object, $prec)	= VMstackPop();
 			#Extract arguments from stack
-			my $arguments	= '(';
-			foreach my $arg (1..$argument_count) {
-				$arguments		.= ', '		if $arg > 1;
-				my ($argument)	= VMstackPop();
-				$arguments		.= $argument;
-			}
-			$arguments		.= ')';
+			my $arguments	= VMstackArguments($argument_count);
 			#Push assembled function call with arguments back to stack
 			$object			= "($object)" if $prec < $precedence;
 			VMstackPush("$object.$property$arguments", $precedence);
@@ -2702,13 +2691,7 @@ sub VMexecute($;$) {
 			my $property		= shift @operand;
 			my ($object, $prec)	= VMstackPop();
 			#Extract arguments from stack
-			my $arguments	= '(';
-			foreach my $arg (1..$argument_count) {
-				$arguments		.= ', '		if $arg > 1;
-				my ($argument)	= VMstackPop();
-				$arguments		.= $argument;
-			}
-			$arguments		.= ')';
+			my $arguments	= VMstackArguments($argument_count);
 			#Push assembled function call with arguments back to stack
 			$object			= "($object)" if $prec < $precedence;
 			VMstackPush("$object.$property$arguments", $precedence);
@@ -2722,13 +2705,7 @@ sub VMexecute($;$) {
 			my ($property)		= VMstackPop();
 			my ($object, $prec)	= VMstackPop();
 			#Extract arguments from stack
-			my $arguments	= '(';
-			foreach my $arg (1..$argument_count) {
-				$arguments		.= ', '		if $arg > 1;
-				my ($argument)	= VMstackPop();
-				$arguments		.= $argument;
-			}
-			$arguments		.= ')';
+			my $arguments	= VMstackArguments($argument_count);
 			#Push assembled function call with arguments back to stack
 			$property		= "($property)";	# Always need paranthesis?
 			$object			= "($object)" if $prec < $precedence;
@@ -2742,13 +2719,7 @@ sub VMexecute($;$) {
 			my $argument_count	= shift @operand;
 			my $property		= shift @operand;
 			#Extract arguments from stack
-			my $arguments	= '(';
-			foreach my $arg (1..$argument_count) {
-				$arguments		.= ', '		if $arg > 1;
-				my ($argument)	= VMstackPop();
-				$arguments		.= $argument;
-			}
-			$arguments		.= ')';
+			my $arguments	= VMstackArguments($argument_count);
 			#Push assembled function call with arguments back to stack
 			VMstackPush("self.$property$arguments", $precedence);
 			return;
@@ -2759,13 +2730,7 @@ sub VMexecute($;$) {
 			my $argument_count	= shift @operand;
 			my ($property)		= VMstackPop();
 			#Extract arguments from stack
-			my $arguments	= '(';
-			foreach my $arg (1..$argument_count) {
-				$arguments		.= ', '		if $arg > 1;
-				my ($argument)	= VMstackPop();
-				$arguments		.= $argument;
-			}
-			$arguments		.= ')';
+			my $arguments	= VMstackArguments($argument_count);
 			#Push assembled function call with arguments back to stack
 			$property		= "($property)";	# Always need paranthesis?
 			VMstackPush("$property$arguments", $precedence);
@@ -2778,13 +2743,7 @@ sub VMexecute($;$) {
 			my ($property)		= VMstackPop();
 			my ($object, $prec)	= VMstackPop();
 			#Extract arguments from stack
-			my $arguments	= '(';
-			foreach my $arg (1..$argument_count) {
-				$arguments		.= ', '		if $arg > 1;
-				my ($argument)	= VMstackPop();
-				$arguments		.= $argument;
-			}
-			$arguments		.= ')';
+			my $arguments	= VMstackArguments($argument_count);
 			#Push assembled function call with arguments back to stack
 			$property		= "($property)";	# Always need paranthesis?
 			$object			= "($object)" if $prec < $precedence;
@@ -2798,13 +2757,7 @@ sub VMexecute($;$) {
 			my $property		= shift @operand;
 			my $object			= shift @operand;
 			#Extract arguments from stack
-			my $arguments	= '(';
-			foreach my $arg (1..$argument_count) {
-				$arguments		.= ', '		if $arg > 1;
-				my ($argument)	= VMstackPop();
-				$arguments		.= $argument;
-			}
-			$arguments		.= ')';
+			my $arguments	= VMstackArguments($argument_count);
 			#Push assembled function call with arguments back to stack
 			VMstackPush("inherited $object.$property$arguments", $precedence);
 			return;
@@ -2815,13 +2768,7 @@ sub VMexecute($;$) {
 			my $argument_count	= shift @operand;
 			my $property		= shift @operand;
 			#Extract arguments from stack
-			my $arguments	= '(';
-			foreach my $arg (1..$argument_count) {
-				$arguments		.= ', '		if $arg > 1;
-				my ($argument)	= VMstackPop();
-				$arguments		.= $argument;
-			}
-			$arguments		.= ')';
+			my $arguments	= VMstackArguments($argument_count);
 			#Push assembled function call with arguments back to stack
 			VMstackPush("self.$property$arguments", $precedence);
 			return;
@@ -2833,13 +2780,7 @@ sub VMexecute($;$) {
 			my $argument_count	= shift @operand;
 			my $property		= shift @operand;
 			#Extract arguments from stack
-			my $arguments	= '(';
-			foreach my $arg (1..$argument_count) {
-				$arguments		.= ', '		if $arg > 1;
-				my ($argument)	= VMstackPop();
-				$arguments		.= $argument;
-			}
-			$arguments		.= ')';
+			my $arguments	= VMstackArguments($argument_count);
 			#Push assembled function call with arguments back to stack
 			VMstackPush("self.$property$arguments", $precedence);
 			return;
@@ -2851,13 +2792,7 @@ sub VMexecute($;$) {
 			my $object			= shift @operand;
 			my $property		= shift @operand;
 			#Extract arguments from stack
-			my $arguments	= '(';
-			foreach my $arg (1..$argument_count) {
-				$arguments		.= ', '		if $arg > 1;
-				my ($argument)	= VMstackPop();
-				$arguments		.= $argument;
-			}
-			$arguments		.= ')';
+			my $arguments	= VMstackArguments($argument_count);
 			#Push assembled function call with arguments back to stack
 			VMstackPush("$object.$property$arguments", $precedence);
 			return;
@@ -2870,13 +2805,7 @@ sub VMexecute($;$) {
 			my $object			= shift @operand;
 			my $property		= shift @operand;
 			#Extract arguments from stack
-			my $arguments	= '(';
-			foreach my $arg (1..$argument_count) {
-				$arguments		.= ', '		if $arg > 1;
-				my ($argument)	= VMstackPop();
-				$arguments		.= $argument;
-			}
-			$arguments		.= ')';
+			my $arguments	= VMstackArguments($argument_count);
 			#Push assembled function call with arguments back to stack
 			VMstackPush("$object.$property$arguments", $precedence);
 			return;
@@ -2887,13 +2816,7 @@ sub VMexecute($;$) {
 			my $argument_count	= shift @operand;
 			my $property		= shift @operand;
 			#Extract arguments from stack
-			my $arguments	= '(';
-			foreach my $arg (1..$argument_count) {
-				$arguments		.= ', '		if $arg > 1;
-				my ($argument)	= VMstackPop();
-				$arguments		.= $argument;
-			}
-			$arguments		.= ')';
+			my $arguments	= VMstackArguments($argument_count);
 			#Push assembled function call with arguments back to stack
 			VMstackPush("inherited $property$arguments", $precedence);
 			return;
@@ -2904,13 +2827,7 @@ sub VMexecute($;$) {
 			my $argument_count	= shift @operand;
 			my ($property)		= VMstackPop();
 			#Extract arguments from stack
-			my $arguments	= '(';
-			foreach my $arg (1..$argument_count) {
-				$arguments		.= ', '		if $arg > 1;
-				my ($argument)	= VMstackPop();
-				$arguments		.= $argument;
-			}
-			$arguments		.= ')';
+			my $arguments	= VMstackArguments($argument_count);
 			#Push assembled function call with arguments back to stack
 			VMstackPush("self.$property$arguments", $precedence);
 			return;
@@ -2934,13 +2851,7 @@ sub VMexecute($;$) {
 			}
 			else{
 				#Extract arguments from stack
-				my $arguments	= '(';
-				foreach my $arg (1..$argument_count) {
-					$arguments		.= ', '		if $arg > 1;
-					my ($argument)	= VMstackPop();
-					$arguments		.= $argument;
-				}
-				$arguments		.= ')';
+				my $arguments	= VMstackArguments($argument_count);
 				#Push assembled function call with arguments back to stack
 				VMstackPush("$type$arguments", $precedence);
 			}
@@ -3322,6 +3233,20 @@ sub VMstackPush($$) {
 		value		=> $value,
 		precedence	=> $precedence
 	};
+}
+sub VMstackArguments($) {
+	my $argument_count	= shift;
+	return	''	unless defined $argument_count;
+	return	''	if $argument_count == 0;	# NOTE: The TADS-compiler can't handle empty argument list ()
+	#Extract arguments from stack
+	my $arguments	= '(';
+	foreach my $arg (1..$argument_count) {
+		$arguments		.= ', '		if $arg > 1;
+		my ($argument)	= VMstackPop();
+		$arguments		.= $argument;
+	}
+	$arguments		.= ')';
+	return $arguments;
 }
 sub VMbranchStart($$$) {
 	#Start a branch of a given type and interval
