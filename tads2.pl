@@ -8,7 +8,7 @@ use Carp;					# For stack tracing at errors
 
 my $Time_Start	= time();	# Epoch time for start of processing
 ##Version History
-my $Decompiler_Version		= '0.11';
+my $Decompiler_Version		= '0.12a';
 #v0.1:	Initial structure for flow and storage
 #v0.2:	Parsing of data blocks (Headers + XSI/OBJ/RES)
 #v0.3:	Generation and parsing of symbol file
@@ -22,6 +22,8 @@ my $Decompiler_Version		= '0.11';
 #v0.11:	New template
 #v0.11a	Fixed string concatenation and empty switches
 #v0.11b	Fixed a shift in all preloaded argument names
+#v0.11c	Improved symbol loading
+#v0.12a	Fixed proper headers and rewrote symbol handling for methods and functions
 
 ##Global Variables
 #Story Settings
@@ -41,11 +43,11 @@ my %Property_Actions	= ();			# Mapping of which properties refer to which action
 my @Symbol_Action				= ();	# Symbolic names for actions
 my @Symbol_Builtin				= ();	# Symbolic names for builtin functions
 my @Symbol_Object				= ();	# Symbolic names for objects
-my @Symbol_Object_Argument		= ();	# Symbolic names for object arguments
-my @Symbol_Object_Variable		= ();	# Symbolic names for object variables
+my %Symbol_Object_Argument		= ();	# Symbolic names for object arguments
+my %Symbol_Object_Variable		= ();	# Symbolic names for object variables
 my @Symbol_Property				= ();	# Symbolic names for properties
-my @Symbol_Property_Argument	= ();	# Symbolic names for property arguments
-my @Symbol_Property_Variable	= ();	# Symbolic names for property variables
+my %Symbol_Property_Argument	= ();	# Symbolic names for property arguments
+my %Symbol_Property_Variable	= ();	# Symbolic names for property variables
 
 #Statistics
 my %Stat_Object_Count	= ();	# Number of object type found
@@ -110,7 +112,7 @@ sub initialize() {
 	#Parse arguments;
 	parseArguments();
 	#There should be only one argument left, giving the name of the file to parse.
-	die "Use: tads2 [options] file.gam\n$Options" unless ($#ARGV eq 0);
+	die "Use: tads2 [options] file.gam\n$Options" unless ($#ARGV == 0);
 	$FileName_Compiled	= $ARGV[0];
 	if ($FileName_Compiled	=~ m/([-_\w\s]*)\.(gam|rs\d)/i) {
 	#When input file has a recognized extension, use the name of the file
@@ -191,7 +193,7 @@ sub determineVersion() {
 	#Read the signature (first 11 bytes) and compare to known signatures to determine the type of file we have
 	my $signature;
 	my $read = read ($File_Compiled, $signature, 11);
-	die "Unable to read signature from $FileName_Compiled" unless $read eq 11;
+	die "Unable to read signature from $FileName_Compiled" unless $read == 11;
 	#Store container type
 	$Container_Type	= 'Story'		if $signature eq $signature_story;
 	$Container_Type	= 'Resource'	if $signature eq $signature_resource;
@@ -228,51 +230,95 @@ sub loadConstants() {
 		$Symbol_Property[8]		= 'sdesc';
 		$Symbol_Property[9]		= 'thedesc';
 		$Symbol_Property[10]	= 'doDefault';
-		$Symbol_Property_Argument[10] = [undef, 'actor', 'prep', 'iobj'];
+#		$Symbol_Property_Argument{10} = [undef, 'actor', 'prep', 'iobj'];
+		$Symbol_Property_Argument{10}{1}	= 'actor';
+		$Symbol_Property_Argument{10}{2}	= 'prep';
+		$Symbol_Property_Argument{10}{3}	= 'iobj';
 		$Symbol_Property[11]	= 'ioDefault';
-		$Symbol_Property_Argument[11] = [undef, 'actor', 'prep'];
+#		$Symbol_Property_Argument{11} = [undef, 'actor', 'prep'];
+		$Symbol_Property_Argument{11}{1}	= 'actor';
+		$Symbol_Property_Argument{11}{2}	= 'prep';
 		$Symbol_Property[12]	= 'ioAction';
 		$Symbol_Property[13]	= 'location';
 		$Symbol_Property[14]	= 'value';
 		$Symbol_Property[15]	= 'roomAction';
-		$Symbol_Property_Argument[15] = [undef, 'actor', 'verb', 'dobj', 'prep', 'iobj'];
+#		$Symbol_Property_Argument{15} = [undef, 'actor', 'verb', 'dobj', 'prep', 'iobj'];
+		$Symbol_Property_Argument{15}{1}	= 'actor';
+		$Symbol_Property_Argument{15}{2}	= 'verb';
+		$Symbol_Property_Argument{15}{3}	= 'dobj';
+		$Symbol_Property_Argument{15}{4}	= 'prep';
+		$Symbol_Property_Argument{15}{5}	= 'iobj';
 		$Symbol_Property[16]	= 'actorAction';
-		$Symbol_Property_Argument[16] = [undef, 'verb', 'dobj', 'prep', 'iobj'];
+#		$Symbol_Property_Argument{16} = [undef, 'verb', 'dobj', 'prep', 'iobj'];
+		$Symbol_Property_Argument{16}{1}	= 'verb';
+		$Symbol_Property_Argument{16}{2}	= 'dobj';
+		$Symbol_Property_Argument{16}{3}	= 'prep';
+		$Symbol_Property_Argument{16}{4}	= 'iobj';
 		$Symbol_Property[17]	= 'contents';
 		$Symbol_Property[18]	= 'tpl';
 		$Symbol_Property[19]	= 'prepDefault';
 		$Symbol_Property[20]	= 'verActor';
 		$Symbol_Property[21]	= 'validDo';
-		$Symbol_Property_Argument[21] = [undef, 'actor', 'obj', 'seqno'];
+#		$Symbol_Property_Argument{21} = [undef, 'actor', 'obj', 'seqno'];
+		$Symbol_Property_Argument{21}{1}	= 'actor';
+		$Symbol_Property_Argument{21}{2}	= 'actor';
+		$Symbol_Property_Argument{21}{3}	= 'actor';
 		$Symbol_Property[22]	= 'validIo';
-		$Symbol_Property_Argument[22] = [undef, 'actor', 'obj', 'seqno'];
+#		$Symbol_Property_Argument{22} = [undef, 'actor', 'obj', 'seqno'];
+		$Symbol_Property_Argument{22}{1}	= 'actor';
+		$Symbol_Property_Argument{22}{2}	= 'obj';
+		$Symbol_Property_Argument{22}{3}	= 'seqno';
 		$Symbol_Property[23]	= 'lookAround';
-		$Symbol_Property_Argument[23] = [undef, 'verbosity'];
+#		$Symbol_Property_Argument{23} = [undef, 'verbosity'];
+		$Symbol_Property_Argument{23}{1}	= 'verbosity';
 		$Symbol_Property[24]	= 'roomCheck';
-		$Symbol_Property_Argument[24] = [undef, 'verb'];
+#		$Symbol_Property_Argument{24} = [undef, 'verb'];
+		$Symbol_Property_Argument{24}{1}	= 'verb';
 		$Symbol_Property[25]	= 'statusLine';
 		$Symbol_Property[26]	= 'locationOK';
 		$Symbol_Property[27]	= 'isVisible';
-		$Symbol_Property_Argument[27] = [undef, 'vantage'];
+#		$Symbol_Property_Argument{27} = [undef, 'vantage'];
+		$Symbol_Property_Argument{27}{1}	= 'vantage';
 		$Symbol_Property[28]	= 'cantReach';
-		$Symbol_Property_Argument[28] = [undef, 'actor', 'dolist', 'iolist', 'prep'];
+#		$Symbol_Property_Argument{28} = [undef, 'actor', 'dolist', 'iolist', 'prep'];
+		$Symbol_Property_Argument{28}{1}	= 'actor';
+		$Symbol_Property_Argument{28}{2}	= 'dolist';
+		$Symbol_Property_Argument{28}{3}	= 'iolist';
+		$Symbol_Property_Argument{28}{4}	= 'prep';
 		$Symbol_Property[29]	= 'isHim';
 		$Symbol_Property[30]	= 'isHer';
 		$Symbol_Property[31]	= 'action';
-		$Symbol_Property_Argument[31] = [undef, 'actor'];
+#		$Symbol_Property_Argument{31} = [undef, 'actor'];
+		$Symbol_Property_Argument{31}{1}	= 'actor';
 		$Symbol_Property[32]	= 'validDoList';
-		$Symbol_Property_Argument[32] = [undef, 'actor', 'prep', 'iobj'];
+#		$Symbol_Property_Argument{32} = [undef, 'actor', 'prep', 'iobj'];
+		$Symbol_Property_Argument{32}{1}	= 'actor';
+		$Symbol_Property_Argument{32}{2}	= 'prep';
+		$Symbol_Property_Argument{32}{3}	= 'iobj';
 		$Symbol_Property[33]	= 'validIoList';
-		$Symbol_Property_Argument[33] = [undef, 'actor', 'prep', 'dobj'];
+#		$Symbol_Property_Argument{33} = [undef, 'actor', 'prep', 'dobj'];
+		$Symbol_Property_Argument{33}{1}	= 'actor';
+		$Symbol_Property_Argument{33}{2}	= 'prep';
+		$Symbol_Property_Argument{33}{3}	= 'dobj';
 		$Symbol_Property[34]	= 'iobjGen';
-		$Symbol_Property_Argument[34] = [undef, 'actor', 'verb', 'dobj', 'prep'];
+#		$Symbol_Property_Argument{34} = [undef, 'actor', 'verb', 'dobj', 'prep'];
+		$Symbol_Property_Argument{34}{1}	= 'actor';
+		$Symbol_Property_Argument{34}{2}	= 'verb';
+		$Symbol_Property_Argument{34}{3}	= 'dobj';
+		$Symbol_Property_Argument{34}{4}	= 'prep';
 		$Symbol_Property[35]	= 'dobjGen';
-		$Symbol_Property_Argument[35] = [undef, 'actor', 'verb', 'iobj', 'prep'];
+#		$Symbol_Property_Argument{35} = [undef, 'actor', 'verb', 'iobj', 'prep'];
+		$Symbol_Property_Argument{35}{1}	= 'actor';
+		$Symbol_Property_Argument{35}{2}	= 'verb';
+		$Symbol_Property_Argument{35}{3}	= 'iobj';
+		$Symbol_Property_Argument{35}{4}	= 'prep';
 		$Symbol_Property[36]	= 'nilPrep';
 		$Symbol_Property[37]	= 'rejectMultiDobj';
-		$Symbol_Property_Argument[37] = [undef, 'prep'];
+#		$Symbol_Property_Argument{37} = [undef, 'prep'];
+		$Symbol_Property_Argument{37}{1}	= 'prep';
 		$Symbol_Property[38]	= 'moveInto';
-		$Symbol_Property_Argument[38] = [undef, 'dest'];
+#		$Symbol_Property_Argument{38} = [undef, 'dest'];
+		$Symbol_Property_Argument{38}{1}	= 'dest';
 		$Symbol_Property[39]	= 'construct';
 		$Symbol_Property[40]	= 'destruct';
 		$Symbol_Property[41]	= 'validActor';
@@ -282,26 +328,74 @@ sub loadConstants() {
 		$Symbol_Property[45]	= 'multisdesc';
 		$Symbol_Property[46]	= 'tpl2';
 		$Symbol_Property[47]	= 'anyvalue';
-		$Symbol_Property_Argument[47] = [undef, 'num'];
+#		$Symbol_Property_Argument{47} = [undef, 'num'];
+		$Symbol_Property_Argument{47}{1}	= 'num';
 		$Symbol_Property[48]	= 'newNumbered';
-		$Symbol_Property_Argument[48] = [undef, 'actor', 'verb', 'num'];
-	#	$Symbol_Property[49]	= 'unknown';
+#		$Symbol_Property_Argument{48} = [undef, 'actor', 'verb', 'num'];
+		$Symbol_Property_Argument{48}{1}	= 'actor';
+		$Symbol_Property_Argument{48}{2}	= 'verb';
+		$Symbol_Property_Argument{48}{3}	= 'num';
+#		$Symbol_Property[49]	= 'unknown';
 		$Symbol_Property[50]	= 'parseUnknownDobj';
-		$Symbol_Property_Argument[50] = [undef, 'actor', 'prep', 'iobj', 'wordlist'];
+#		$Symbol_Property_Argument{50} = [undef, 'actor', 'prep', 'iobj', 'wordlist'];
+		$Symbol_Property_Argument{50}{1}	= 'actor';
+		$Symbol_Property_Argument{50}{2}	= 'prep';
+		$Symbol_Property_Argument{50}{3}	= 'iobj';
+		$Symbol_Property_Argument{50}{4}	= 'wordlist';
 		$Symbol_Property[51]	= 'parseUnknownIobj';
-		$Symbol_Property_Argument[51] = [undef, 'actor', 'prep', 'iobj', 'wordlist'];
+#		$Symbol_Property_Argument{51} = [undef, 'actor', 'prep', 'iobj', 'wordlist'];
+		$Symbol_Property_Argument{51}{1}	= 'actor';
+		$Symbol_Property_Argument{51}{2}	= 'prep';
+		$Symbol_Property_Argument{51}{3}	= 'iobj';
+		$Symbol_Property_Argument{51}{4}	= 'wordlist';
 		$Symbol_Property[52]	= 'dobjCheck';
-		$Symbol_Property_Argument[52] = [undef, 'actor', 'prep', 'iobj', 'prep'];
+#		$Symbol_Property_Argument{52} = [undef, 'actor', 'prep', 'iobj', 'prep'];
+		$Symbol_Property_Argument{52}{1}	= 'actor';
+		$Symbol_Property_Argument{52}{2}	= 'prep';
+		$Symbol_Property_Argument{52}{3}	= 'iobj';
+		$Symbol_Property_Argument{52}{4}	= 'wordlist';	# detads says this is second prep
 		$Symbol_Property[53]	= 'iobjCheck';
-		$Symbol_Property_Argument[53] = [undef, 'actor', 'prep', 'iobj', 'prep'];
+#		$Symbol_Property_Argument{53} = [undef, 'actor', 'prep', 'iobj', 'prep'];
+		$Symbol_Property_Argument{53}{1}	= 'actor';
+		$Symbol_Property_Argument{53}{2}	= 'prep';
+		$Symbol_Property_Argument{53}{3}	= 'iobj';
+		$Symbol_Property_Argument{53}{4}	= 'wordlist';	# detads says this is second prep
 		$Symbol_Property[54]	= 'verbAction';
-		$Symbol_Property_Argument[54] = [undef, 'actor', 'dobj', 'prep', 'iobj'];
+#		$Symbol_Property_Argument{54} = [undef, 'actor', 'dobj', 'prep', 'iobj'];
+		$Symbol_Property_Argument{51}{1}	= 'actor';
+		$Symbol_Property_Argument{51}{2}	= 'dobj';
+		$Symbol_Property_Argument{51}{3}	= 'prep';
+		$Symbol_Property_Argument{51}{4}	= 'iobj';
 		$Symbol_Property[55]	= 'disambigDobj';
-		$Symbol_Property_Argument[55] = [undef, 'actor', 'prep', 'iobj', 'verprop', 'wordlist', 'objlist', 'flaglist', 'numberWanted', 'isAmbiguous', 'silent'];
+#		$Symbol_Property_Argument{55} = [undef, 'actor', 'prep', 'iobj', 'verprop', 'wordlist', 'objlist', 'flaglist', 'numberWanted', 'isAmbiguous', 'silent'];
+		$Symbol_Property_Argument{55}{1}	= 'actor';
+		$Symbol_Property_Argument{55}{2}	= 'prep';
+		$Symbol_Property_Argument{55}{3}	= 'iobj';
+		$Symbol_Property_Argument{55}{4}	= 'verprop';
+		$Symbol_Property_Argument{55}{5}	= 'wordlist';
+		$Symbol_Property_Argument{55}{6}	= 'objlist';
+		$Symbol_Property_Argument{55}{7}	= 'flaglist';
+		$Symbol_Property_Argument{55}{8}	= 'numberWanted';
+		$Symbol_Property_Argument{55}{9}	= 'isAmbiguous';
+		$Symbol_Property_Argument{55}{10}	= 'silent';
 		$Symbol_Property[56]	= 'disambigIobj';
-		$Symbol_Property_Argument[56] = [undef, 'actor', 'prep', 'dobj', 'verprop', 'wordlist', 'objlist', 'flaglist', 'numberWanted', 'isAmbiguous', 'silent'];
+#		$Symbol_Property_Argument{56} = [undef, 'actor', 'prep', 'dobj', 'verprop', 'wordlist', 'objlist', 'flaglist', 'numberWanted', 'isAmbiguous', 'silent'];
+		$Symbol_Property_Argument{56}{1}	= 'actor';
+		$Symbol_Property_Argument{56}{2}	= 'prep';
+		$Symbol_Property_Argument{56}{3}	= 'iobj';
+		$Symbol_Property_Argument{56}{4}	= 'verprop';
+		$Symbol_Property_Argument{56}{5}	= 'wordlist';
+		$Symbol_Property_Argument{56}{6}	= 'objlist';
+		$Symbol_Property_Argument{56}{7}	= 'flaglist';
+		$Symbol_Property_Argument{56}{8}	= 'numberWanted';
+		$Symbol_Property_Argument{56}{9}	= 'isAmbiguous';
+		$Symbol_Property_Argument{56}{10}	= 'silent';
 		$Symbol_Property[57]	= 'prefixdesc';
-		$Symbol_Property_Argument[57] = [undef, 'show', 'current_index', 'count', 'multi_flags'];
+#		$Symbol_Property_Argument{57} = [undef, 'show', 'current_index', 'count', 'multi_flags'];
+		$Symbol_Property_Argument{57}{1}	= 'show';
+		$Symbol_Property_Argument{57}{2}	= 'current_index';
+		$Symbol_Property_Argument{57}{3}	= 'count';
+		$Symbol_Property_Argument{57}{4}	= 'multi_flags';
 		$Symbol_Property[58]	= 'isThem';
 	}
 	{	#Builtin functions; sourced from detads by Daniel Schepler
@@ -585,36 +679,45 @@ sub loadSymbols() {
 		$line	= (split('#', $line))[0];		# Remove comments
 		#Skip ahead if the line doesn't contain anything
 		next if($line =~ m/^\s*$/i );
-		my $parsed;
-		if($line =~ m/(Action|Act)s?\[?(\d*)\]?\s*=\s*['"](.*)['"]/i ) {
-			$parsed 			= $3;
-			$Symbol_Action[$2]	= $parsed;
+		my $type;
+		if($line =~ m/(Action|Act)(\d+)\s*=\s*['"](.*)['"]/i ) {
+			$type	 			= $1;
+			$Symbol_Action[$2]	= $3;
 		}
-		if($line =~ m/(Object|Obj)s?\[?(\d*)\]?\s*=\s*['"](.*)['"]/i ) {
-			$parsed 			= $3;
-			$Symbol_Object[$2]	= $parsed;
+		if($line =~ m/(Object|Obj)(\d+)\s*=\s*['"](.*)['"]/i ) {
+			$type 				= $1;
+			$Symbol_Object[$2]	= $3;
 		}
-		if($line =~ m/(Object|Obj)s?[-_]?(Arg|Argument)?\[?(\d*)[.-](\d*)\]?\s*=\s*['"](.*)['"]/i ) {
-			$parsed 						= $5;
-			$Symbol_Object_Argument[$3][$4]	= $parsed;
+		if($line =~ m/(Object|Obj)(\d+)[-_.]?(Arg|Argument)(\d+)\s*=\s*['"](.*)['"]/i ) {
+			$type 							= $1 . $3;
+			$Symbol_Object_Argument{$2}{$4}	= $5;
+#			$Symbol_Object_Argument[$2][$4]	= $5;
 		}
-		if($line =~ m/(Object|Obj)s?[-_]?(Loc|Local|Var|)?\[?(\d*)[.-](\d*)\]?\s*=\s*['"](.*)['"]/i ) {
-			$parsed 						= $5;
-			$Symbol_Object_Variable[$3][$4]	= $parsed;
+		if($line =~ m/(Object|Obj)(\d+)[-_.]?(Loc|Local|Var|Variable)(\d+)\s*=\s*['"](.*)['"]/i ) {
+			$type 							= $1 . $3;
+			$Symbol_Object_Variable{$2}{$4}	= $5;
+#			$Symbol_Object_Variable[$2][$4]	= $5;
 		}
-		if($line =~ m/(Property|Properties|Props|Prop)\[?(\d*)\]?\s*=\s*['"](.*)['"]/i ) {
-			$parsed 					= $3;
-			$Symbol_Property[$2]		= $parsed;
+		if($line =~ m/(Property|Prop)(\d+)\s*=\s*['"](.*)['"]/i ) {
+			$type 					= $1;
+			$Symbol_Property[$2]	= $3;
 		}
-		if($line =~ m/(Property|Props|Prop)[-_]?(Arg|Argument)?\[?(\d*)[.-](\d*)\]?\s*=\s*['"](.*)['"]/i ) {
-			$parsed 							= $5;
-			$Symbol_Property_Argument[$3][$4]	= $parsed;
+		if($line =~ m/(Property|Prop)(\d+)[-_.]?(Arg|Argument)(\d+)\s*=\s*['"](.*)['"]/i ) {
+			$type 								= $1 . $3;
+			$Symbol_Property_Argument{$2}{$4}	= $5;
+#			$Symbol_Property_Argument[$2][$4]	= $5;
 		}
-		if($line =~ m/(Property|Props|Prop)[-_]?(Loc|Local|Var)?\[?(\d*)[.-](\d*)\]?\s*=\s*['"](.*)['"]/i ) {
-			$parsed 							= $5;
-			$Symbol_Property_Variable[$3][$4]	= $parsed;
+		if($line =~ m/(Object|Obj)(\d+)[-_.]?(Property|Prop)(\d+)[-_.]?(Loc|Local|Var|Variable)(\d+)\s*=\s*['"](.*)['"]/i ) {
+			$type									= $1 . $3 . $5;
+			$Symbol_Property_Variable{$2}{$4}{$6}	= $7;
+#			$Symbol_Property_Variable[$2][$4][$6]	= $7;
 		}
-		print "Unable to parse $line\n" unless defined $parsed;
+#		if($line =~ m/(Property|Prop)(\d+)[-_.]?(Loc|Local|Var|Variable)(\d+)\s*=\s*['"](.*)['"]/i ) {
+#			$type 								= $1 . $3;
+#			$Symbol_Property_Variable[$2][$4]	= $5;
+#		}
+#		print $File_Log "Parsed symbol of type $type\n" if defined $type;
+		print "Unable to parse $line\n" unless defined $type;
 	}
 	close $File_Symbol;
 }
@@ -698,7 +801,7 @@ sub parseXSI($) {
 	#XSI blocks contains the XOR Seed Information for the compiled file.
 	my $block = shift;
 	my $length	= length($block);
-	if ($length eq 2) {
+	if ($length == 2) {
 		#Read initial seed value and increment value
 		$Encryption{Seed}		= unpack('C', substr($block, 0, 1));
 		$Encryption{Increment}	= unpack('C', substr($block, 1, 1));
@@ -729,7 +832,7 @@ sub parseOBJ($) {
 		$pos	+= 7 + $size;
 		#Store according to type
 		$Stat_Object_Count{$type}++;
-		if		($type eq 1) { # Function
+		if		($type == 1) { # Function
 			#Functions are just code, so we simply store it for later parsing
 			print $File_Log "\tObj$id: function ($size bytes)\n"	if $Option_Verbose;
 			print $File_Log "\t\tUnknown is $unknown\n"				if $Option_Verbose && $size != $unknown;
@@ -738,7 +841,7 @@ sub parseOBJ($) {
 				code		=> $data
 			};
 		}
-		elsif	($type eq 2) { # Meta-Object
+		elsif	($type == 2) { # Meta-Object
 			#Meta-Objects have their own sub-header, followed by data
 			#  0-1	Workspace (UINT16)
 			#  2-3	Flags (bitmap)
@@ -856,40 +959,40 @@ sub parseREQ($) {
 		$obj_names[5]	= 'againVerb';
 		$obj_names[6]	= 'init';
 		$obj_names[7]	= 'preparse';
-		$arg_names[7]	= ['cmd'];
+		$arg_names[7]	= [undef, 'cmd'];
 		$obj_names[8]	= 'parseError';
-		$arg_names[8]	= ['num', 'str'];
+		$arg_names[8]	= [undef, 'num', 'str'];
 		$obj_names[9]	= 'commandPrompt';
-		$arg_names[9]	= ['type'];
+		$arg_names[9]	= [undef, 'type'];
 		$obj_names[10]	= 'parseDisambig';
-		$arg_names[10]	= ['nameString', 'objList'];
+		$arg_names[10]	= [undef, 'nameString', 'objList'];
 		$obj_names[11]	= 'parseError2';
-		$arg_names[11]	= ['verb', 'dobj', 'prep', 'iobj'];
+		$arg_names[11]	= [undef, 'verb', 'dobj', 'prep', 'iobj'];
 		$obj_names[12]	= 'parseDefault';
-		$arg_names[12]	= ['obj', 'prep'];
+		$arg_names[12]	= [undef, 'obj', 'prep'];
 		$obj_names[13]	= 'parseAskobj';
-		$arg_names[13]	= ['verb'];
+		$arg_names[13]	= [undef, 'verb'];
 		$obj_names[14]	= 'preparseCmd';
-		$arg_names[14]	= ['wordList'];
+		$arg_names[14]	= [undef, 'wordList'];
 		$obj_names[15]	= 'parseAskobjActor';
-		$arg_names[15]	= ['actor', 'verb'];
+		$arg_names[15]	= [undef, 'actor', 'verb'];
 		$obj_names[16]	= 'parseErrorParam';
-		$arg_names[16]	= ['num', 'str'];
+		$arg_names[16]	= [undef, 'num', 'str'];
 		$obj_names[17]	= 'commandAfterRead';
-		$arg_names[17]	= ['type'];
+		$arg_names[17]	= [undef, 'type'];
 		$obj_names[18]	= 'initRestore';
 		$obj_names[19]	= 'parseUnknownVerb';
-		$arg_names[19]	= ['actor', 'wordlist', 'typelist', 'errnum'];
+		$arg_names[19]	= [undef, 'actor', 'wordlist', 'typelist', 'errnum'];
 		$obj_names[20]	= 'parseNounPhrase';
-		$arg_names[20]	= ['wordlist', 'typelist', 'currentIndex', 'complainOnNoMatch', 'isActorCheck'];
+		$arg_names[20]	= [undef, 'wordlist', 'typelist', 'currentIndex', 'complainOnNoMatch', 'isActorCheck'];
 		$obj_names[21]	= 'postAction';
-		$arg_names[21]	= ['actor', 'verb', 'dobj', 'prep', 'iobj', 'status'];
+		$arg_names[21]	= [undef, 'actor', 'verb', 'dobj', 'prep', 'iobj', 'status'];
 		$obj_names[22]	= 'endCommand';
-		$arg_names[22]	= ['actor', 'verb', 'dobj_list', 'prep', 'iobj', 'status'];
+		$arg_names[22]	= [undef, 'actor', 'verb', 'dobj_list', 'prep', 'iobj', 'status'];
 		$obj_names[23]	= 'preCommand';
-		$arg_names[23]	= ['actor', 'verb', 'dobj_list', 'prep', 'iobj'];
+		$arg_names[23]	= [undef, 'actor', 'verb', 'dobj_list', 'prep', 'iobj'];
 		$obj_names[24]	= 'parseAskobjIndirect';
-		$arg_names[24]	= ['actor', 'verb', 'prep', 'objectList'];
+		$arg_names[24]	= [undef, 'actor', 'verb', 'prep', 'objectList'];
 		$obj_names[25]	= 'preparseExt';		# From fio.c
 		$obj_names[26]	= 'parseDefaultExt';	# From fio.c
 	}
@@ -900,25 +1003,24 @@ sub parseREQ($) {
 		my $obj	= unpack('S', substr($block, $entry * 2, 2));
 		unless ($obj eq $Null_Value) {
 			$actual++;
-			{	#Update names for object, logging any changes
-				my $rename = 1;
-				undef $rename unless defined $Symbol_Object[$obj] && not $Symbol_Object[$obj] eq $obj_names[$entry];
-				if (defined $rename){
-					print $File_Log "INFO\tObj$obj renamed to $obj_names[$entry]\n";
-					$Symbol_Object[$obj]	= $obj_names[$entry];
-				}
+			#Update names for object, logging any changes
+			if (defined $Symbol_Object[$obj] && $Symbol_Object[$obj] ne $obj_names[$entry]) {
+				my $message = "Obj$obj renamed to $obj_names[$entry]\n";
+				print $message;
+				print $File_Log "INFO\t$message" 
 			}
+			$Symbol_Object[$obj]	= $obj_names[$entry];
 			#Loop through all arguments, if defined
 			my $arguments	= -1;
 			$arguments		= @{ $arg_names[$entry] } if defined $arg_names[$entry];
 			for my $arg(0 .. $arguments) {
 				#Update names for argument, logging any changes
-				my $rename = 1;
-				undef $rename unless defined $Symbol_Object_Argument[$obj][$arg] && $Symbol_Object_Argument[$obj] != $arg_names[$entry][$arg];
-				if (defined $rename){
-					print $File_Log "INFO\tObjArg$obj-$arg renamed to $arg_names[$entry][$arg]\n";
-					$Symbol_Object_Argument[$obj][$arg] = $arg_names[$entry][$arg];
+				if (defined $Symbol_Object_Argument{$obj}{$arg} && $Symbol_Object_Argument{$obj}{$arg} ne $arg_names[$entry][$arg]) {
+					my $message = "Obj$obj-Arg$arg renamed to $arg_names[$entry][$arg]\n";
+					print $message;
+					print $File_Log "INFO\t$message" 
 				}
+				$Symbol_Object_Argument{$obj}{$arg} = $arg_names[$entry][$arg];
 			}
 		}
 	}
@@ -1009,7 +1111,7 @@ sub parseRES($) {
 	my $offset	= unpack('L', substr($block, 4, 4));
 	print $File_Log "\t$entries Resources\n";
 	#Read metadata and embedded data for each entry in one pass
-	print "Extracting $entries Resources...\n" unless $Option_Minimal or $entries eq 0;
+	print "Extracting $entries Resources...\n" unless $Option_Minimal or $entries == 0;
 	my $pos		= 8;
 	for my $i (1 .. $entries) {
 		#Metadata
@@ -1143,11 +1245,11 @@ sub analyzeActions() {
 				#Try to rename each of the four properties; these are similar but slightly different
 				if ($ver_io_prop) { #Indirect Object Verification
 					#Generate a property name 
-					my $name	= uniformName('Ver I O '.$action_name.' '.$preposition);
+					my $name	= uniformName('Ver IO '.$action_name.' '.$preposition);
 					#Rename property and arguments, update property-action mapping
 					$Property_Actions{$ver_io_prop}	= $action	unless defined $Property_Actions{$ver_io_prop};
 					$Symbol_Property[$ver_io_prop]	= $name		unless defined $Symbol_Property[$ver_io_prop];
-					@{ $Symbol_Property_Argument[$ver_io_prop] }	= (undef, 'actor');
+					$Symbol_Property_Argument{$ver_io_prop}	= {	1 => 'actor' };
 					#Check if updates took hold
 					my $skipped						= 1;
 					my $unmapped					= 1;
@@ -1167,11 +1269,11 @@ sub analyzeActions() {
 				}
 				if ($exc_io_prop) { #Indirect Object Execution
 					#Generate a property name 
-					my $name	= uniformName('Exc I O '.$action_name.' '.$preposition);
+					my $name	= uniformName('IO '.$action_name.' '.$preposition);
 					#Rename property and arguments, update property-action mapping
 					$Property_Actions{$exc_io_prop}	= $action	unless defined $Property_Actions{$exc_io_prop};
 					$Symbol_Property[$exc_io_prop]	= $name		unless defined $Symbol_Property[$exc_io_prop];
-					@{ $Symbol_Property_Argument[$exc_io_prop] }	= (undef, 'actor', 'dobj');
+					$Symbol_Property_Argument{$exc_io_prop}	= {	1 => 'actor', 2 => 'dobj' };
 					#Check if updates took hold
 					my $skipped						= 1;
 					my $unmapped					= 1;
@@ -1184,19 +1286,19 @@ sub analyzeActions() {
 					print $File_Log	"\t\t$preposition:\n"					if ($skipped or $unmapped) && $subheader_needed;
 					undef $subheader_needed									if ($skipped or $unmapped);
 					#Log renamings if needed
-					print $File_Log	"\t\t\tExcIO\tProp$exc_io_prop: $name"	if $skipped or $Option_Verbose;
+					print $File_Log	"\t\t\tIO\tProp$exc_io_prop: $name"	if $skipped or $Option_Verbose;
 					print $File_Log "\t<- ".nameProperty($exc_io_prop)		if $skipped;
 					print $File_Log "\t(Action $action->$Property_Actions{$exc_io_prop})"	if $unmapped;
 					print $File_Log	"\n"									if $skipped or $Option_Verbose;
 				}
 				if ($ver_do_prop) { #Direct Object Verification
 					#Generate a property name 
-					my $name	= uniformName('Ver D O '.$action_name.' '.$preposition);
+					my $name	= uniformName('Ver DO '.$action_name.' '.$preposition);
 					#Rename property and arguments, update property-action mapping
 					$Property_Actions{$ver_do_prop}	= $action	unless defined $Property_Actions{$ver_do_prop};
 					$Symbol_Property[$ver_do_prop]	= $name		unless defined $Symbol_Property[$ver_do_prop];
-					@{ $Symbol_Property_Argument[$ver_do_prop] }	= (undef, 'actor', 'iobj')	if ($exc_io_prop);
-					@{ $Symbol_Property_Argument[$ver_do_prop] }	= (undef, 'actor')		unless ($exc_io_prop);
+					$Symbol_Property_Argument{$ver_do_prop}	= {	1 => 'actor', 2=> 'iobj' }	if ($exc_io_prop);
+					$Symbol_Property_Argument{$ver_do_prop}	= {	1 => 'actor' }			unless ($exc_io_prop);
 					#Check if updates took hold
 					my $skipped						= 1;
 					my $unmapped					= 1;
@@ -1216,12 +1318,12 @@ sub analyzeActions() {
 				}
 				if ($exc_do_prop) { #Direct Object Execution
 					#Generate a property name 
-					my $name	= uniformName('Exc D O '.$action_name.' '.$preposition);
+					my $name	= uniformName('DO '.$action_name.' '.$preposition);
 					#Rename property and arguments, update property-action mapping
 					$Property_Actions{$exc_do_prop}	= $action	unless defined $Property_Actions{$exc_do_prop};
 					$Symbol_Property[$exc_do_prop]	= $name		unless defined $Symbol_Property[$exc_do_prop];
-					@{ $Symbol_Property_Argument[$exc_do_prop] }	= (undef, 'actor', 'iobj')	if ($exc_io_prop);
-					@{ $Symbol_Property_Argument[$exc_do_prop] }	= (undef, 'actor')		unless ($exc_io_prop);
+					$Symbol_Property_Argument{$exc_do_prop}	= {	1 => 'actor', 2=> 'iobj' }	if ($exc_io_prop);
+					$Symbol_Property_Argument{$exc_do_prop}	= {	1 => 'actor' }			unless ($exc_io_prop);
 					#Check if updates took hold
 					my $skipped						= 1;
 					my $unmapped					= 1;
@@ -1234,7 +1336,7 @@ sub analyzeActions() {
 					print $File_Log	"\t\t$preposition:\n"					if ($skipped or $unmapped) && $subheader_needed;
 					undef $subheader_needed									if ($skipped or $unmapped);
 					#Log renamings if needed
-					print $File_Log	"\t\t\tExcDO\tProp$exc_do_prop: $name"	if $skipped or $Option_Verbose;
+					print $File_Log	"\t\t\tDO\tProp$exc_do_prop: $name"	if $skipped or $Option_Verbose;
 					print $File_Log "\t<- ".nameProperty($exc_do_prop)		if $skipped;
 					print $File_Log "\t(Action $action->$Property_Actions{$exc_do_prop})"	if $unmapped;
 					print $File_Log	"\n"									if $skipped or $Option_Verbose;
@@ -1295,7 +1397,7 @@ sub analyzeCodeblocks() {
 		#Not all Object ID's are actually used
 		next unless defined $Objects[$obj];
 		#Decode function objects
-		if ($Objects[$obj]{type} eq 1) {
+		if ($Objects[$obj]{type} == 1) {
 			unless (defined $Objects[$obj]{code}) {
 				print $File_Log "ERROR\tObj$obj\tMissing codeblock; Unable to analyze function code\n";
 				next;
@@ -1305,7 +1407,7 @@ sub analyzeCodeblocks() {
 			$Objects[$obj]{instructions}	= analyzeCodeblock(-$obj, $Objects[$obj]{code});
 		}
 		#Decode property functions
-		elsif ($Objects[$obj]{type} eq 2) {
+		elsif ($Objects[$obj]{type} == 2) {
 			unless (defined $Objects[$obj]{properties}) {
 				print $File_Log "ERROR\tObj$obj\tMissing properties; Unable to analyze property code\n";
 				next;
@@ -1374,7 +1476,7 @@ sub analyzeCodeblock($$) {
 		#Log statistics
 		$Stat_Opcode_Count{$opcode}++;
 		#If we got a switch table, remember to skip over it later on.
-		if ($opcode eq 0x4B) {
+		if ($opcode == 0x4B) {
 			my $start	= $instruction{switch_start};
 			my $end		= $instruction{switch_end};
 			push @exclusion_intervals, {
@@ -1589,19 +1691,19 @@ sub analyzeOpcode($$$) {
 	}
 	#Assignment opcodes are handled as a bitflag
 	else {
-		if    (($opcode & 0x03) eq 0x00){
+		if    (($opcode & 0x03) == 0x00) {
 			#Local ID embedded as INT16
 			my $value	= nameVariable($id, unpack('s', substr($codeblock, $pos + $size, 2)));
 			$size+=2;
 			push @operand, $value;
 		}
-		elsif (($opcode & 0x03) eq 0x01){
+		elsif (($opcode & 0x03) == 0x01) {
 			#Object ID embedded as INT16
 			my $value	= nameProperty(unpack('s', substr($codeblock, $pos + $size, 2)));
 			$size+=2;
 			push @operand, $value;
 		}
-		if    (($opcode & 0x03) eq 0x1c) {
+		if    (($opcode & 0x03) == 0x1c) {
 			#Extended opcode
 			my $value	= ord(substr($codeblock, $pos + $size, 1));
 			$size++;
@@ -1630,14 +1732,14 @@ sub generate() {
 	#Generate object source, one type at a time
 	generateOBJ();
 }
-sub generateOBJ(){
+sub generateOBJ() {
 	print $File_Decompiled "\n\n//\t## Function Definitions ##\n";
 	#Forward-declare all functions, with naming
 	for my $obj (0 .. $#Objects) {
 		#Not all objects are used
 		next unless defined $Objects[$obj];
 		#Only define functions
-		next unless $Objects[$obj]{type} eq 1;
+		next unless $Objects[$obj]{type} == 1;
 		#Generate function definitions
 		print $File_Decompiled nameObject($obj) . ": function;\n";
 	}
@@ -1646,7 +1748,7 @@ sub generateOBJ(){
 		#Not all objects are used
 		next unless defined $Objects[$obj];
 		#Only generate functions
-		next unless $Objects[$obj]{type} eq 1;
+		next unless $Objects[$obj]{type} == 1;
 		#Generate function source
 		generateOBJFunc($obj);
 	}
@@ -1655,22 +1757,22 @@ sub generateOBJ(){
 		#Not all objects are used
 		next unless defined $Objects[$obj];
 		#Only generate functions
-		next unless $Objects[$obj]{type} eq 2;
+		next unless $Objects[$obj]{type} == 2;
 		#Generate meta-object source
 		generateOBJMeta($obj);
 	}
 }
-sub generateOBJFunc($){
+sub generateOBJFunc($) {
 	#Generate and print the source for a function
 	my $obj	= shift;
 	print $File_Log "\tObj$obj: Function\n"	if $Option_Verbose;
 	#Include symbol mapping
 	print $File_Decompiled	"\n//\tObj$obj\t= '".nameObject($obj)."'\n";
 	#Print the instructions, which include the function header
-	generateCode(-$obj, $Objects[$obj]{instructions});
+	generateCode($obj, undef, $Objects[$obj]{instructions});
 
 }
-sub generateOBJMeta($){
+sub generateOBJMeta($) {
 	#Generate and print the source for a meta-object
 	my $obj	= shift;
 	#Keep track of whether we need to print the object header
@@ -1741,7 +1843,7 @@ sub generateOBJMeta($){
 					my $exc_do		= unpack('S', substr($prop_data, $i * 16 + 9, 2)); # Property for DirectObject execute
 					#Write default preposition
 					my $prep_name	= nameObject($prep_obj);
-					print $File_Decompiled "\tprepDefault\t= $prep_name\n" if $i eq 0 && $prep_obj != $Null_Value;
+					print $File_Decompiled "\tprepDefault\t= $prep_name\n" if $i == 0 && $prep_obj != $Null_Value;
 					#Write action reference
 					my $act_name		= nameAction($Objects[$obj]{properties}{$prop}{action});
 					my $act_type	= 'doAction';
@@ -1754,7 +1856,7 @@ sub generateOBJMeta($){
 			#Synonym action reference
 			elsif	($Constant_Property_Type[$prop_type] eq 'synonym') {
 				my $property_target	= unpack('S', $prop_data);
-				if (defined $Property_Actions{$prop} && defined $Property_Actions{$property_target}){
+				if (defined $Property_Actions{$prop} && defined $Property_Actions{$property_target}) {
 					my $action_target	= nameAction($Property_Actions{$property_target});
 					my $action_this		= nameAction($Property_Actions{$prop});
 					my $action_type		= nameProperty($prop);
@@ -1777,7 +1879,7 @@ sub generateOBJMeta($){
 			#Codeblock
 			elsif	($Constant_Property_Type[$prop_type] eq 'code') {
 				print $File_Log "\t\tObj$obj.Prop$prop Code:\n"	if $Option_Verbose;
-				generateCode($prop, $Objects[$obj]{properties}{$prop}{instructions});
+				generateCode($obj, $prop, $Objects[$obj]{properties}{$prop}{instructions});
 			}
 			#Raw value
 			else {
@@ -1790,21 +1892,30 @@ sub generateOBJMeta($){
 		}
 	}
 }
-sub generateCode($){
-	my $id					= shift;
+sub generateCode($) {
+	my $obj					= shift;
+	my $prop				= shift;
 	my $instructions_ref	= shift;
 	#Determine if we're generating a property or function source 
-	my $print_id;
-	my $mode_obj;
-	my $mode_prop;
-	if ($id < 0) { #Object Function
-		$mode_obj	= 1;
-		$print_id	= "Obj".(-$id);
+	my $print_id	= "Obj$obj";
+	my $tab		= '';
+	my $mode;
+	if (defined $prop) {	#PropID defined, must be property method
+		$mode		= 'method';
+		$tab		= "\t";
+		$print_id	.= ".Prop$prop";
 	}
-	if ($id > 0) { #Property Method
-		$mode_prop	= 1;
-		$print_id	= "Prop$id";
+	else {					# Only ObjID defined, must be function
+		$mode		= 'function';
 	}
+#	if ($id < 0) { #Object Function
+#		$mode_obj	= 1;
+#		$print_id	= "Obj".(-$id);
+#	}
+#	if ($id > 0) { #Property Method
+#		$mode_prop	= 1;
+#		$print_id	= "Prop$id";
+#	}
 	#Restart the VM
 	VMinit();
 	#Initiate the main branch and decode instructions
@@ -1816,7 +1927,7 @@ sub generateCode($){
 		my $location	= "\@$pos/$VM_Label_Next";
 		#Check for end of branches
 		my ($type, $start, $end)	= VMbranchGet();
-		while($end && $end eq $VM_Label_Next){
+		while($end && $end eq $VM_Label_Next) {
 #			print $File_Log "Checking Ending for $type: ($start - $end): Labels \@ $VM_Label_Current/$VM_Label_Next\n";
 			if ($type eq 'OR') {	
 				#Defered evaluation of short-circuited OR
@@ -1845,7 +1956,7 @@ sub generateCode($){
 				VMstackPush("$arg1 $operator $arg2", $precedence);
 				#End the branch and log branch manipulation for debugging
 				VMbranchEnd();
-				print $File_Log "OR(END)\t$location ($start-$end)\n"		if $Option_Verbose;
+				print $File_Log "AND(END)\t$location ($start-$end)\n"		if $Option_Verbose;
 				next;
 			}
 			if ($type eq 'CASE') {
@@ -1881,7 +1992,7 @@ sub generateCode($){
 				#Continue from the correct instruction
 				$VM_Label_Current	= $next_pos;
 				$VM_Label_Updated++;
-				for (my $i=0 ; $i<=$#VM_Instructions ; $i++){
+				for (my $i=0 ; $i<=$#VM_Instructions ; $i++) {
 					if ($VM_Instructions[$i]{pos} eq $next_pos) {
 						$instruction = $i-1;
 						last;
@@ -1912,14 +2023,14 @@ sub generateCode($){
 				next;
 			}
 		}
-		continue{
+		continue {
 			#Update flow control
 			($type, $start, $end)	= VMbranchGet();
 			#Update labels as needed
 			$VM_Label_Current	= $VM_Label_Next if $VM_Label_Update && not $VM_Label_Updated;
 		}
 		#Check for fatal errors
-		if(defined $VM_Fatal_Error){
+		if(defined $VM_Fatal_Error) {
 			print $File_Log "\t$print_id\n"	unless $Option_Verbose;
 			print $File_Log "ERROR\t$VM_Fatal_Error\n";
 			warn $VM_Fatal_Error;
@@ -1935,20 +2046,14 @@ sub generateCode($){
 		#Trim duplicates
 		my $distinct = 1;
 		while ($distinct < $#VM_Labels) {
-			if ($VM_Labels[$distinct-1] eq $VM_Labels[$distinct]){ splice @VM_Labels, $distinct, 1 }
+			if ($VM_Labels[$distinct-1] eq $VM_Labels[$distinct]) { splice @VM_Labels, $distinct, 1 }
 			else { $distinct++ }
 		}
 		#Find the line corresponding to the position
-		for my $label (0 .. $#VM_Labels){
+		for my $label (0 .. $#VM_Labels) {
 			my $found;
-			for my $line (0 .. $#VM_Lines) {
-				last if $VM_Lines[$line]{label} > $VM_Labels[$label]; #We're past it..
-				next if $VM_Lines[$line]{label} < $VM_Labels[$label]; #This is not the one
-				$VM_Lines[$line]{print_label}	= 1;
-				$found++;
-			}
-			#Label could be at the end..
-			if ($VM_Lines[$#VM_Lines]{label} < $VM_Labels[$label]){
+			#Label could be past the end of the lines
+			if ($VM_Lines[$#VM_Lines]{label} < $VM_Labels[$label]) {
 				push @VM_Lines, {
 					text	=> "label$VM_Labels[$label];",
 					label	=> $VM_Labels[$label],
@@ -1956,58 +2061,71 @@ sub generateCode($){
 				};
 				$found++;
 			}
+			#Scan through lines in reverse order
+			else {
+				for (my $line = $#VM_Lines ; $line >= 0 ; $line--) {
+					last if $VM_Lines[$line]{label} < $VM_Labels[$label]; #We're past it..
+					next if $VM_Lines[$line]{label} > $VM_Labels[$label]; #This is not the one
+					$VM_Lines[$line]{print_label}	= 1;
+					$found++;
+					last;
+				}
+			}
 			unless (defined $found) {
 				print $File_Log "\t$print_id\n"	unless $Option_Verbose;
 				print $File_Log "ERROR\tUnable to insert label$VM_Labels[$label]\n";
 			}
 		}
 	}
-	{	#Assemble header
-		print $File_Decompiled nameObject(-$id) . ": function"	if $mode_obj;
-		print $File_Decompiled "\t".nameProperty($id)."\t= "	if $mode_prop;
-		#Print arguments
-		my $arguments = '';
-		if ($VM_Arguments){
+	{	#Assemble header w/ arguments
+		my $arguments	= '';
+		if ($VM_Arguments) {
 			$arguments		= '(';
 			foreach my $arg (1 .. $VM_Arguments & 127) {
 				$arguments	.= ', '	if $arg > 1;
-				$arguments	.= nameVariable($id, -$arg);
+				$arguments	.= nameFunctionArgument($obj, $arg)	if $mode eq 'function';
+				$arguments	.= nameMethodArgument($obj, $arg)	if $mode eq 'method';
+				#$arguments	.= nameVariable(-$obj, -$arg);
 			}
-			$arguments		.= ')';
+			$arguments	.= ')';
 		}
-		print $File_Decompiled "$arguments {\n";
-		#Print local variable definitions
-		if ($VM_Locals){
-			my $locals;
-			$locals		= 'local '	if $VM_Locals;
-			for (my $i=1 ; $i<=$VM_Locals ; $i++){
-				$locals	.= ', '	if $i > 1;
-				$locals	.= nameVariable($id, $i);
+		my $header;
+		$header	= nameObject($obj) . ": function$arguments"		if $mode eq 'function';
+		$header	= "\t".nameProperty($prop)."$arguments\t="		if $mode eq 'method';
+		print $File_Decompiled "$header\n$tab\{\n";
+	}
+	{	#Define local variables
+		if ($VM_Locals) {
+			my $locals	= "\tlocal ";
+			$locals		= "\t$locals"	if $mode eq 'method';
+			foreach my $var (1 .. $VM_Locals) {
+				$locals	.= ', '	if $var > 1;
+				$locals	.= nameFunctionVariable($obj, $var)			if $mode eq 'function';
+				$locals	.= nameMethodVariable($obj, $prop, $var)	if $mode eq 'method';
 			}
-			print $File_Decompiled "\t"				if defined $locals && $mode_prop;
-			print $File_Decompiled "\t$locals;\n"	if defined $locals;
+			print $File_Decompiled "$locals;\n";
 		}
 		#Initial values for local variables are often left on stack
 		#TODO: Try to fit this into local variable declarations
-		print $File_Decompiled "//\tWARNING: Orphaned values found on stack:\n" unless $#VM_Stack eq -1;
+		print $File_Decompiled "//\tWARNING: Orphaned values left on stack:\n" unless $#VM_Stack eq -1;
 		while ($#VM_Stack != -1) {
 			my ($value)	= VMstackPop();
 			print $File_Decompiled "//\t\t$value\n";
 		}
 	}
 	{	#Print lines
-		for (my $line=0 ; $line<=$#VM_Lines ; $line++){
+		for (my $line=0 ; $line<=$#VM_Lines ; $line++) {
 			my $text;
 			my $indent	= $VM_Lines[$line]{indent};
 			#Print label if needed
 			print $File_Decompiled "label$VM_Lines[$line]{label}:\n" 	if defined $VM_Lines[$line]{print_label};
 			#Concatenate subsequent string outputs
-			if (defined $VM_Lines[$line]{text} && $VM_Lines[$line]{text} =~ m/^"(.*)";$/m){
+			if (defined $VM_Lines[$line]{text} && $VM_Lines[$line]{text} =~ m/^"(.*)";$/m) {
 				$text	= '"' . $1;
 				my $nextline = $line +1;
 				#Ensure are no intervening labels and everything is on the same indentation
-				while($nextline <= $#VM_Lines && $VM_Lines[$nextline]{indent} eq $indent && not $VM_Lines[$nextline]{print_label}){
-					if ($VM_Lines[$nextline]{text} =~ m/^"(.*)";$/m){
+				while($nextline <= $#VM_Lines && $VM_Lines[$nextline]{indent} eq $indent && not $VM_Lines[$nextline]{print_label}) {
+					if ($VM_Lines[$nextline]{text} =~ m/^"(.*)";$/m) {
 						$text	.= $1;
 						$nextline++;
 					}
@@ -2023,15 +2141,13 @@ sub generateCode($){
 			}
 			#Indent properly before writing text
 			for my $t (0 .. $indent) { print $File_Decompiled "\t"; }
-			print $File_Decompiled "\t"			if $mode_prop;
-			print $File_Decompiled "$text\n";
+			print $File_Decompiled "$tab$text\n";
 		}
-		print $File_Decompiled "\t"				if $mode_prop;
-		print $File_Decompiled "}\n";
+		print $File_Decompiled "$tab}\n";
 	}
 }
 ##Virtual Machine Simulator
-sub VMinit(){
+sub VMinit() {
 	#Reset everything related to the VM
 	@VM_Instructions	= ();
 	@VM_Stack			= ();
@@ -2043,7 +2159,7 @@ sub VMinit(){
 	$VM_Label_Current	= 0;
 }
 sub VMexecute($;$);
-sub VMexecute($;$){
+sub VMexecute($;$) {
 	#Execute the given instruction on the current state of the VM
 	my $instruction_ref	= shift;
 	my $location		= shift;
@@ -2072,11 +2188,11 @@ sub VMexecute($;$){
 			#	01	PROP	embedded(UINT16) applied to object from stack
 			#	10	(index, list)	from stack
 			#	11	(prop, obj)		from stack
-			if		($variable_mask eq 0x00) {
+			if		($variable_mask == 0x00) {
 				#Local variable, stored in operand
 				$variable				= shift @operand;
 			}
-			elsif	($variable_mask eq 0x01) {
+			elsif	($variable_mask == 0x01) {
 				#Property from operand applied to object from stack
 				my $property			= shift @operand;
 				my ($object, $prec)		= VMstackPop();
@@ -2084,7 +2200,7 @@ sub VMexecute($;$){
 				#Assemble variable
 				$variable				=	"$object.$property";
 			}
-			elsif	($variable_mask eq 0x02) {
+			elsif	($variable_mask == 0x02) {
 				#Index from stack applied to list from stack
 				my ($index)				= VMstackPop();
 				my ($list, $prec)		= VMstackPop();
@@ -2092,7 +2208,7 @@ sub VMexecute($;$){
 				#Assemble variable
 				$variable		= $list . '[' . $index . ']';
 			}
-			elsif	($variable_mask eq 0x03) {
+			elsif	($variable_mask == 0x03) {
 				#Property from stack applied to object from stack
 				my ($property)			= VMstackPop();
 				my ($object, $prec)		= VMstackPop();
@@ -2111,13 +2227,13 @@ sub VMexecute($;$){
 			#	101		++	increment tos
 			#	110		--	decrement tos
 			#	111			extension flag
-			$operator	= ':='	if $operator_mask eq 0x00;
-			$operator	= '+='	if $operator_mask eq 0x04;
-			$operator	= '-='	if $operator_mask eq 0x08;
-			$operator	= '*='	if $operator_mask eq 0x0C;
-			$operator	= '/='	if $operator_mask eq 0x10;
-			$operator	= '++'	if $operator_mask eq 0x14;
-			$operator	= '--'	if $operator_mask eq 0x18;
+			$operator	= ':='	if $operator_mask == 0x00;
+			$operator	= '+='	if $operator_mask == 0x04;
+			$operator	= '-='	if $operator_mask == 0x08;
+			$operator	= '*='	if $operator_mask == 0x0C;
+			$operator	= '/='	if $operator_mask == 0x10;
+			$operator	= '++'	if $operator_mask == 0x14;
+			$operator	= '--'	if $operator_mask == 0x18;
 			#If extension flag is set, contains an extra byte in operand:
 			#	1	%=	modulo and assign
 			#	2	&=	binary AND and assign
@@ -2125,14 +2241,14 @@ sub VMexecute($;$){
 			#	4	^=	binary XOR and assign
 			#	5	<<=	shift left and assign
 			#	6	>>=	shift right and assign
-			if ($operator_mask eq 0x1c){
+			if ($operator_mask == 0x1c) {
 				my $extended	= shift @operand;
-				$operator	= '%='	if $extended eq 1;
-				$operator	= '&='	if $extended eq 2;
-				$operator	= '|='	if $extended eq 3;
-				$operator	= '^='	if $extended eq 4;
-				$operator	= '<<='	if $extended eq 5;
-				$operator	= '>>='	if $extended eq 6;
+				$operator	= '%='	if $extended == 1;
+				$operator	= '&='	if $extended == 2;
+				$operator	= '|='	if $extended == 3;
+				$operator	= '^='	if $extended == 4;
+				$operator	= '<<='	if $extended == 5;
+				$operator	= '>>='	if $extended == 6;
 			}
 		}
 		{	#5	Destinationtype
@@ -2141,7 +2257,7 @@ sub VMexecute($;$){
 			$discard	= $opcode & 0x20;
 		}
 		{	#Get the value to modify by and build the assignment
-			if ($operator eq '++' or $operator eq '--'){
+			if ($operator eq '++' or $operator eq '--') {
 				#Implied value operator; Discard flag indicates post or pre assignment
 				$assignment		= "$operator$variable" if $discard;
 				$assignment		= "$variable$operator" unless $discard;
@@ -2161,66 +2277,66 @@ sub VMexecute($;$){
 		return;
 	}
 	{	#Push value to stack
-		if	($opcode eq 0x01) {	# OPCPUSHNUM		01
+		if	($opcode == 0x01) {	# OPCPUSHNUM		01
 			#Push number from operator to stack
 			my $value	= shift @operand;
 			VMstackPush($value, 14);
 			return;
 		}
-		if	($opcode eq 0x02) {	# OPCPUSHOBJ		02
+		if	($opcode == 0x02) {	# OPCPUSHOBJ		02
 			#Push object from operator to stack
 			my $value	= shift @operand;
 			VMstackPush($value, 14);
 			return;
 		}
-		if	($opcode eq 0x14) {	# OPCGETLCL			20
+		if	($opcode == 0x14) {	# OPCGETLCL			20
 			#Push local variable from operator to stack
 			my $value	= shift @operand;
 			VMstackPush($value, 14);
 			return;
 		}
-		if	($opcode eq 0x1F) {	# OPCPUSHSTR		31
+		if	($opcode == 0x1F) {	# OPCPUSHSTR		31
 			#Push string from operator to stack
 			my $value	= shift @operand;
 			VMstackPush($value, 14);
 			return;
 		}
-		if	($opcode eq 0x20) {	# OPCPUSHLST		32
+		if	($opcode == 0x20) {	# OPCPUSHLST		32
 			#Push list from operator to stack
 			my $value	= shift @operand;
 			VMstackPush($value, 14);
 			return;
 		}
-		if	($opcode eq 0x23) {	# OPCPUSHFN			35
+		if	($opcode == 0x23) {	# OPCPUSHFN			35
 			#Push function reference from operator to stack
 			my $value	= shift @operand;
 			VMstackPush($value, 14);
 			return;
 		}
-		if	($opcode eq 0x43) {	# OPCPUSHPN			67
+		if	($opcode == 0x43) {	# OPCPUSHPN			67
 			#Push pointer from operator to stack
 			my $value	= shift @operand;
 			VMstackPush($value, 14);
 			return;
 		}
-		if	($opcode eq 0x1C) {	# OPCPUSHSELF		28
+		if	($opcode == 0x1C) {	# OPCPUSHSELF		28
 			#Push static word to stack
 			VMstackPush('self', 14);
 			return;
 		}
-		if	($opcode eq 0x21) {	# OPCPUSHNIL		33
+		if	($opcode == 0x21) {	# OPCPUSHNIL		33
 			#Push static word to stack
 			VMstackPush('nil', 14);
 			return;
 		}
-		if	($opcode eq 0x22) {	# OPCPUSHTRUE		34
+		if	($opcode == 0x22) {	# OPCPUSHTRUE		34
 			#Push static word to stack
 			VMstackPush('true', 14);
 			return;
 		}
 	}
 	{	#Unary operators
-		if	($opcode eq 0x03) {	# OPCNEG			03
+		if	($opcode == 0x03) {	# OPCNEG			03
 			#Perform unary operation on the top argument from stack, pushing the result back
 			my $precedence		= 11;
 			my $operator		= '-';
@@ -2231,7 +2347,7 @@ sub VMexecute($;$){
 			VMstackPush("$operator$arg", $precedence);
 			return;
 		}
-		if	($opcode eq 0x04) {	# OPCNOT			04
+		if	($opcode == 0x04) {	# OPCNOT			04
 			#Perform unary operation on the top argument from stack, pushing the result back
 			my $precedence		= 11;
 			my $operator		= 'not ';
@@ -2242,7 +2358,7 @@ sub VMexecute($;$){
 			VMstackPush("$operator$arg", $precedence);
 			return;
 		}
-		if	($opcode eq 0x57) {	# OPCBNOT			87
+		if	($opcode == 0x57) {	# OPCBNOT			87
 			#Perform unary operation on the top argument from stack, pushing the result back
 			my $precedence		= 11;
 			my $operator		= '~';
@@ -2253,7 +2369,7 @@ sub VMexecute($;$){
 			VMstackPush("$operator$arg", $precedence);
 			return;
 		}
-		if	($opcode eq 0x5A) {	# OPCNEW			90
+		if	($opcode == 0x5A) {	# OPCNEW			90
 			#Perform unary operation on the top argument from stack, pushing the result back
 			my $precedence		= 11;
 			my $operator		= 'new ';
@@ -2264,7 +2380,7 @@ sub VMexecute($;$){
 			VMstackPush("$operator$arg", $precedence);
 			return;
 		}
-		if	($opcode eq 0x5B) {	# OPCDELETE			91
+		if	($opcode == 0x5B) {	# OPCDELETE			91
 			#Perform unary operation on the top argument from stack, pushing the result back
 			my $precedence		= 11;
 			my $operator		= 'delete ';
@@ -2277,7 +2393,7 @@ sub VMexecute($;$){
 		}
 	}
 	{	#Binary operators
-		if	($opcode eq 0x05) {	# OPCADD			05
+		if	($opcode == 0x05) {	# OPCADD			05
 			#Perform binary operation on top two arguments from stack, pushing the result back
 			my $precedence		= 9;
 			my $operator		= '+';
@@ -2290,7 +2406,7 @@ sub VMexecute($;$){
 			VMstackPush("$arg1 $operator $arg2", $precedence);
 			return;
 		}
-		if	($opcode eq 0x06) {	# OPCSUB			06
+		if	($opcode == 0x06) {	# OPCSUB			06
 			#Perform binary operation on top two arguments from stack, pushing the result back
 			my $precedence		= 9;
 			my $operator		= '-';
@@ -2303,7 +2419,7 @@ sub VMexecute($;$){
 			VMstackPush("$arg1 $operator $arg2", $precedence);
 			return;
 		}
-		if	($opcode eq 0x07) {	# OPCMUL			07
+		if	($opcode == 0x07) {	# OPCMUL			07
 			#Perform binary operation on top two arguments from stack, pushing the result back
 			my $precedence		= 10;
 			my $operator		= '*';
@@ -2316,7 +2432,7 @@ sub VMexecute($;$){
 			VMstackPush("$arg1 $operator $arg2", $precedence);
 			return;
 		}
-		if	($opcode eq 0x08) {	# OPCDIV			08
+		if	($opcode == 0x08) {	# OPCDIV			08
 			#Perform binary operation on top two arguments from stack, pushing the result back
 			my $precedence		= 10;
 			my $operator		= '/';
@@ -2329,7 +2445,7 @@ sub VMexecute($;$){
 			VMstackPush("$arg1 $operator $arg2", $precedence);
 			return;
 		}
-		if	($opcode eq 0x09) {	# OPCAND			09
+		if	($opcode == 0x09) {	# OPCAND			09
 			#Perform binary operation on top two arguments from stack, pushing the result back
 			my $precedence		= 3;
 			my $operator		= $Option_PragmaC ? '&&' : 'and';
@@ -2342,7 +2458,7 @@ sub VMexecute($;$){
 			VMstackPush("$arg1 $operator $arg2", $precedence);
 			return;
 		}
-		if	($opcode eq 0x0A) {	# OPCOR				10
+		if	($opcode == 0x0A) {	# OPCOR				10
 			#Perform binary operation on top two arguments from stack, pushing the result back
 			my $precedence		= 2;
 			my $operator		= $Option_PragmaC ? '||' : 'or';
@@ -2355,7 +2471,7 @@ sub VMexecute($;$){
 			VMstackPush("$arg1 $operator $arg2", $precedence);
 			return;
 		}
-		if	($opcode eq 0x0B) {	# OPCEQ				11
+		if	($opcode == 0x0B) {	# OPCEQ				11
 			#Perform binary operation on top two arguments from stack, pushing the result back
 			my $precedence		= 7;
 			my $operator		= $Option_PragmaC ? '==' : '=';
@@ -2368,7 +2484,7 @@ sub VMexecute($;$){
 			VMstackPush("$arg1 $operator $arg2", $precedence);
 			return;
 		}
-		if	($opcode eq 0x0C) {	# OPCNE				12
+		if	($opcode == 0x0C) {	# OPCNE				12
 			#Perform binary operation on top two arguments from stack, pushing the result back
 			my $precedence		= 7;
 			my $operator		= $Option_PragmaC ? '!=' : '<>';
@@ -2381,7 +2497,7 @@ sub VMexecute($;$){
 			VMstackPush("$arg1 $operator $arg2", $precedence);
 			return;
 		}
-		if	($opcode eq 0x0D) {	# OPCGT				13
+		if	($opcode == 0x0D) {	# OPCGT				13
 			#Perform binary operation on top two arguments from stack, pushing the result back
 			my $precedence		= 7;
 			my $operator		= '>';
@@ -2394,7 +2510,7 @@ sub VMexecute($;$){
 			VMstackPush("$arg1 $operator $arg2", $precedence);
 			return;
 		}
-		if	($opcode eq 0x0E) {	# OPCGE				14
+		if	($opcode == 0x0E) {	# OPCGE				14
 			#Perform binary operation on top two arguments from stack, pushing the result back
 			my $precedence		= 7;
 			my $operator		= '>=';
@@ -2407,7 +2523,7 @@ sub VMexecute($;$){
 			VMstackPush("$arg1 $operator $arg2", $precedence);
 			return;
 		}
-		if	($opcode eq 0x0F) {	# OPCLT				15
+		if	($opcode == 0x0F) {	# OPCLT				15
 			#Perform binary operation on top two arguments from stack, pushing the result back
 			my $precedence		= 7;
 			my $operator		= '<';
@@ -2420,7 +2536,7 @@ sub VMexecute($;$){
 			VMstackPush("$arg1 $operator $arg2", $precedence);
 			return;
 		}
-		if	($opcode eq 0x10) {	# OPCLE				16
+		if	($opcode == 0x10) {	# OPCLE				16
 			#Perform binary operation on top two arguments from stack, pushing the result back
 			my $precedence		= 7;
 			my $operator		= '<=';
@@ -2433,7 +2549,7 @@ sub VMexecute($;$){
 			VMstackPush("$arg1 $operator $arg2", $precedence);
 			return;
 		}
-		if	($opcode eq 0x53) {	# OPCMOD			83
+		if	($opcode == 0x53) {	# OPCMOD			83
 			#Perform binary operation on top two arguments from stack, pushing the result back
 			my $precedence		= 10;
 			my $operator		= '%';
@@ -2446,7 +2562,7 @@ sub VMexecute($;$){
 			VMstackPush("$arg1 $operator $arg2", $precedence);
 			return;
 		}
-		if	($opcode eq 0x54) {	# OPCBAND			84
+		if	($opcode == 0x54) {	# OPCBAND			84
 			#Perform binary operation on top two arguments from stack, pushing the result back
 			my $precedence		= 6;
 			my $operator		= '&';
@@ -2459,7 +2575,7 @@ sub VMexecute($;$){
 			VMstackPush("$arg1 $operator $arg2", $precedence);
 			return;
 		}
-		if	($opcode eq 0x55) {	# OPCBOR			85
+		if	($opcode == 0x55) {	# OPCBOR			85
 			#Perform binary operation on top two arguments from stack, pushing the result back
 			my $precedence		= 4;
 			my $operator		= '|';
@@ -2472,7 +2588,7 @@ sub VMexecute($;$){
 			VMstackPush("$arg1 $operator $arg2", $precedence);
 			return;
 		}
-		if	($opcode eq 0x56) {	# OPCXOR			86
+		if	($opcode == 0x56) {	# OPCXOR			86
 			#Perform binary operation on top two arguments from stack, pushing the result back
 			my $precedence		= 5;
 			my $operator		= '^';
@@ -2485,7 +2601,7 @@ sub VMexecute($;$){
 			VMstackPush("$arg1 $operator $arg2", $precedence);
 			return;
 		}
-		if	($opcode eq 0x58) {	# OPCSHL			88
+		if	($opcode == 0x58) {	# OPCSHL			88
 			#Perform binary operation on top two arguments from stack, pushing the result back
 			my $precedence		= 8;
 			my $operator		= '<<';
@@ -2498,7 +2614,7 @@ sub VMexecute($;$){
 			VMstackPush("$arg1 $operator $arg2", $precedence);
 			return;
 		}
-		if	($opcode eq 0x59) {	# OPCSHR			89
+		if	($opcode == 0x59) {	# OPCSHR			89
 			#Perform binary operation on top two arguments from stack, pushing the result back
 			my $precedence		= 8;
 			my $operator		= '>>';
@@ -2513,7 +2629,7 @@ sub VMexecute($;$){
 		}
 	}
 	{	#List operators
-		if	($opcode eq 0x40) {	# OPCINDEX			64
+		if	($opcode == 0x40) {	# OPCINDEX			64
 			#Index from stack applied to list from stack
 			my $precedence		= 13;
 			my ($index)			= VMstackPop();
@@ -2523,7 +2639,7 @@ sub VMexecute($;$){
 			VMstackPush($list .'['. $index . ']', $precedence);
 			return;
 		}
-		if	($opcode eq 0x4A) {	# OPCCONS			74
+		if	($opcode == 0x4A) {	# OPCCONS			74
 			#Construct a new list with number of elements from operand, retrieved from stack
 			my $precedence		= 14;
 			my $element_count	= shift @operand;
@@ -2542,7 +2658,7 @@ sub VMexecute($;$){
 		}
 	}
 	{	#Function calls
-		if	($opcode eq 0x11) {	# OPCCALL			17
+		if	($opcode == 0x11) {	# OPCCALL			17
 			#Perform a function call to object in operand and push result to stack
 			my $precedence		= 13;
 			my $argument_count	= shift @operand;
@@ -2559,7 +2675,7 @@ sub VMexecute($;$){
 			VMstackPush("$function$arguments", $precedence);
 			return;
 		}
-		if	($opcode eq 0x12) {	# OPCGETP			18
+		if	($opcode == 0x12) {	# OPCGETP			18
 			#Perform a call to property in operand on object from stack and push result to stack
 			my $precedence		= 13;
 			my $argument_count	= shift @operand;
@@ -2578,7 +2694,7 @@ sub VMexecute($;$){
 			VMstackPush("$object.$property$arguments", $precedence);
 			return;
 		}
-		if	($opcode eq 0x13) {	# OPCGETPDATA		19	EXPERIMENTAL
+		if	($opcode == 0x13) {	# OPCGETPDATA		19	EXPERIMENTAL
 			#Perform a call to property in operand on object from stack and push result to stack
 			#EXPERIMENTAL: Assumed to be functionally identical to 0x12
 			my $precedence		= 13;
@@ -2598,7 +2714,7 @@ sub VMexecute($;$){
 			VMstackPush("$object.$property$arguments", $precedence);
 			return;
 		}
-		if	($opcode eq 0x15) {	# OPCPTRGETPDATA	21	EXPERIMENTAL
+		if	($opcode == 0x15) {	# OPCPTRGETPDATA	21	EXPERIMENTAL
 			#Perform a call to property from stack on object from stack and push result to stack
 			#EXPERIMENTAL: Assumed to be functionally identical to 0x28
 			my $precedence		= 13;
@@ -2619,7 +2735,7 @@ sub VMexecute($;$){
 			VMstackPush("$object.$property$arguments", $precedence);
 			return;
 		}
-		if	($opcode eq 0x24) {	# OPCGETPSELFDATA	36	EXPERIMENTAL
+		if	($opcode == 0x24) {	# OPCGETPSELFDATA	36	EXPERIMENTAL
 			#Perform a call to property in operand on self and push result to stack
 			#EXPERIMENTAL: Assumed to be functionally identical to 0x3C
 			my $precedence		= 13;
@@ -2637,7 +2753,7 @@ sub VMexecute($;$){
 			VMstackPush("self.$property$arguments", $precedence);
 			return;
 		}
-		if	($opcode eq 0x26) {	# OPCPTRCALL		38
+		if	($opcode == 0x26) {	# OPCPTRCALL		38
 			#Perform a call to property in operand and push result to stack
 			my $precedence		= 13;
 			my $argument_count	= shift @operand;
@@ -2655,7 +2771,7 @@ sub VMexecute($;$){
 			VMstackPush("$property$arguments", $precedence);
 			return;
 		}
-		if	($opcode eq 0x28) {	# OPCPTRGETP		40
+		if	($opcode == 0x28) {	# OPCPTRGETP		40
 			#Perform a call to property from stack on object from stack and push result to stack
 			my $precedence		= 13;
 			my $argument_count	= shift @operand;
@@ -2675,7 +2791,7 @@ sub VMexecute($;$){
 			VMstackPush("$object.$property$arguments", $precedence);
 			return;
 		}
-		if	($opcode eq 0x2E) {	# OPCEXPINH			46
+		if	($opcode == 0x2E) {	# OPCEXPINH			46
 			#Perform an inherited call to property in operand on object in operand and push result to stack
 			my $precedence		= 13;
 			my $argument_count	= shift @operand;
@@ -2693,7 +2809,7 @@ sub VMexecute($;$){
 			VMstackPush("inherited $object.$property$arguments", $precedence);
 			return;
 		}
-		if	($opcode eq 0x3C) {	# OPCGETPSELF		60
+		if	($opcode == 0x3C) {	# OPCGETPSELF		60
 			#Perform a call to property in operand on self and push result to stack
 			my $precedence		= 13;
 			my $argument_count	= shift @operand;
@@ -2710,7 +2826,7 @@ sub VMexecute($;$){
 			VMstackPush("self.$property$arguments", $precedence);
 			return;
 		}
-		if	($opcode eq 0x3D) {	# OPCGETPSLFD		61	EXPERIMENTAL
+		if	($opcode == 0x3D) {	# OPCGETPSLFD		61	EXPERIMENTAL
 			#Perform a call to property in operand on self and push result to stack
 			#EXPERIMENTAL: Assumed to be functionally identical to 0x3C
 			my $precedence		= 13;
@@ -2728,7 +2844,7 @@ sub VMexecute($;$){
 			VMstackPush("self.$property$arguments", $precedence);
 			return;
 		}
-		if	($opcode eq 0x3E) {	# OPCGETPOBJ		62
+		if	($opcode == 0x3E) {	# OPCGETPOBJ		62
 			#Perform a call to property in operand on object in operand and push result to stack
 			my $precedence		= 13;
 			my $argument_count	= shift @operand;
@@ -2746,7 +2862,7 @@ sub VMexecute($;$){
 			VMstackPush("$object.$property$arguments", $precedence);
 			return;
 		}
-		if	($opcode eq 0x3F) {	# OPCGETPOBJD		63	EXPERIMENTAL
+		if	($opcode == 0x3F) {	# OPCGETPOBJD		63	EXPERIMENTAL
 			#Perform a call to property in operand on object in operand and push result to stack
 			#EXPERIMENTAL: Assumed to be functionally identical to 0x3F
 			my $precedence		= 13;
@@ -2765,7 +2881,7 @@ sub VMexecute($;$){
 			VMstackPush("$object.$property$arguments", $precedence);
 			return;
 		}
-		if	($opcode eq 0x47) {	# OPCINHERIT		71
+		if	($opcode == 0x47) {	# OPCINHERIT		71
 			#Perform a call to inherited property in operand and push result to stack
 			my $precedence		= 13;
 			my $argument_count	= shift @operand;
@@ -2782,7 +2898,7 @@ sub VMexecute($;$){
 			VMstackPush("inherited $property$arguments", $precedence);
 			return;
 		}
-		if	($opcode eq 0x52) {	# OPCGETPPTRSELF	82	EXPERIMENTAL
+		if	($opcode == 0x52) {	# OPCGETPPTRSELF	82	EXPERIMENTAL
 			#Perform a call to property from stack on self and push result to stack
 			my $precedence		= 13;
 			my $argument_count	= shift @operand;
@@ -2799,13 +2915,13 @@ sub VMexecute($;$){
 			VMstackPush("self.$property$arguments", $precedence);
 			return;
 		}
-		if	($opcode eq 0x1E){	# OPCBUILTIN		30
+		if	($opcode == 0x1E) {	# OPCBUILTIN		30
 			#Call to builtin function as defined in operand
 			my $precedence		= 13;
 			my $argument_count	= shift @operand;
 			my $type 			= shift @operand;
 			#Say (type0) with 2 arguments is a special case
-			if ($type eq $Symbol_Builtin[0] && $argument_count eq 2){
+			if ($type eq $Symbol_Builtin[0] && $argument_count == 2) {
 				#Inline text substitution: "<< expr >>"
 				my $line;
 				my ($expr)	= VMstackPop();
@@ -2832,41 +2948,41 @@ sub VMexecute($;$){
 		}
 	}
 	{	#Output
-		if	($opcode eq 0x19) {	# OPCDISCARD		25
+		if	($opcode == 0x19) {	# OPCDISCARD		25
 			#Discard the top element of the stack, which implies a print
 			my ($line)		= VMstackPop();
 			#'Print' the line
-			VMprint("$line;")	unless $line eq 'nil';
+			VMprint("$line;");
 			return;
 		}
-		if	($opcode eq 0x1D) {	# OPCSAY			29
+		if	($opcode == 0x1D) {	# OPCSAY			29
 			#Say the string in operand
 			my $text	= shift @operand;
 			VMprint("$text;");
 			return;
 		}
-		if	($opcode eq 0x29) {	# OPCPASS			41
+		if	($opcode == 0x29) {	# OPCPASS			41
 			#Pass the property in operand
 			my $property	= shift @operand;
 			VMprint("pass ($property);");
 			return;
 		}
-		if	($opcode eq 0x2A) {	# OPCEXIT			42
+		if	($opcode == 0x2A) {	# OPCEXIT			42
 			#Signal an Exit
 			VMprint("exit;");
 			return;
 		}
-		if	($opcode eq 0x2B) {	# OPCABORT			43
+		if	($opcode == 0x2B) {	# OPCABORT			43
 			#Signal an Abort
 			VMprint("abort;");
 			return;
 		}
-		if	($opcode eq 0x2C) {	# OPCASKDO			44
+		if	($opcode == 0x2C) {	# OPCASKDO			44
 			#Signal an DO verification
 			VMprint("askdo;");
 			return;
 		}
-		if	($opcode eq 0x2D) {	# OPCASKIO			45
+		if	($opcode == 0x2D) {	# OPCASKIO			45
 			#Signal an IO verification with property from operand
 			my $property	= shift @operand;
 			VMprint("askdo($property);");
@@ -2874,7 +2990,7 @@ sub VMexecute($;$){
 		}
 	}
 	{	#Branch manipulation
-		if	($opcode eq 0x16) {	# OPCRETURN			22
+		if	($opcode == 0x16) {	# OPCRETURN			22
 			#Return from function without any value
 			my ($type, $start, $end)	= VMbranchGet();
 			#'Print' the line, Suppress valueless returns that terminate the main loop
@@ -2885,7 +3001,7 @@ sub VMexecute($;$){
 			print $File_Log "RETURN\t$location\tduring $type($start-$end)\n"	if $Option_Verbose;
 			return;
 		}
-		if	($opcode eq 0x17) {	# OPCRETVAL			23
+		if	($opcode == 0x17) {	# OPCRETVAL			23
 			#Return from function with the top stack value
 			my ($value)				= VMstackPop();
 			my ($type, $start, $end)= VMbranchGet();
@@ -2897,7 +3013,7 @@ sub VMexecute($;$){
 			print $File_Log "RETURN\t$location\tduring $type($start-$end)\n"	if $Option_Verbose;
 			return;
 		}
-		if	($opcode eq 0x1A) {	# OPCJMP			26
+		if	($opcode == 0x1A) {	# OPCJMP			26
 			#Unconditional jump, can be used in different branching structures:
 			#	WHILE	END		Destination is the start of current WHILE branch
 			#			BREAK	Destination is the end of topmost WHILE branch
@@ -2910,20 +3026,20 @@ sub VMexecute($;$){
 			my $switch_end;
 			my $while_end;
 			my $jump_type;
-			{	#Calculate relevant variables
+			{	#Calculate relevant determination variables
 				my $switch_level;
 				my $while_level;
 				#Find the end of the topmost switch branch
-				for (my $lvl = $#VM_Branches ; $lvl >= 0 ; $lvl--){
-					if ($VM_Branches[$lvl]{type} eq 'SWITCH'){
+				for (my $lvl = $#VM_Branches ; $lvl >= 0 ; $lvl--) {
+					if ($VM_Branches[$lvl]{type} eq 'SWITCH') {
 						$switch_end			= $VM_Branches[$lvl]{end};
 						$switch_level		= $lvl;
 						last;
 					}
 				}
 				#Find the end of the topmost while branch
-				for (my $lvl = $#VM_Branches ; $lvl >= 0 ; $lvl--){
-					if ($VM_Branches[$lvl]{type} eq 'WHILE'){
+				for (my $lvl = $#VM_Branches ; $lvl >= 0 ; $lvl--) {
+					if ($VM_Branches[$lvl]{type} eq 'WHILE') {
 						$while_end			= $VM_Branches[$lvl]{end};
 						$while_level		= $lvl;
 						last;
@@ -2938,8 +3054,10 @@ sub VMexecute($;$){
 			#Determine the corresponding branching construct
 #			{	#DEBUG
 #				print $File_Log "JUMP (0x1A) to $destination during $type ($start-$end): $VM_Label_Next\n";
-#				print $File_Log "Switch\t$switch_end\n"		if defined $switch_end;
-#				print $File_Log "While\t$while_end\n"		if defined $while_end;
+#				print $File_Log "\tLabel:\t $VM_Label_Current\n";
+#				print $File_Log "\tDest:\t $destination\n";
+#				print $File_Log "\tSwitch\t$switch_end\n"	if defined $switch_end;
+#				print $File_Log "\tWhile\t$while_end\n"		if defined $while_end;
 #			}
 			if	  ($type eq 'WHILE' && $start eq $destination && $end eq $VM_Label_Next) {	# WHILE-END
 				$jump_type	= 'WHILE(END)';
@@ -2948,17 +3066,17 @@ sub VMexecute($;$){
 				#'Print' closing bracket
 				VMprint('}');
 			}
-			elsif (defined $while_end && $while_end eq $destination){						# WHILE-BREAK
+			elsif (defined $while_end && $while_end eq $destination) {						# WHILE-BREAK
 				$jump_type	= 'WHILE(BREAK)';
 				#'Print' a break statement
 				VMprint('break;');
 			}
-			elsif (defined $switch_end && $switch_end eq $destination){						# SWITCH-BREAK
+			elsif (defined $switch_end && $switch_end eq $destination) {						# SWITCH-BREAK
 				$jump_type	= 'SWITCH(BREAK)';
 				#'Print' a break statement
 				VMprint('break;');
 			}
-			elsif ($type eq 'ELSIF' && $end eq $destination){								# ELSIF-ELSE
+			elsif ($type eq 'ELSIF' && $end eq $destination) {								# ELSIF-ELSE
 				$jump_type	= 'ELSIF(ELSE)';
 				#'Print' an else on the next level down; this can be appended by an IF (0x1B) as next opcode
 				VMprint('}', -1);
@@ -2975,7 +3093,7 @@ sub VMexecute($;$){
 			print $File_Log "$jump_type\t$location to $destination\tduring $type($start-$end)\n"	if $Option_Verbose;
 			return;
 		}
-		if	($opcode eq 0x1B) {	# OPCJF				27
+		if	($opcode == 0x1B) {	# OPCJF				27
 			#Conditional jump, can indicate different branching structures:
 			#	GOTO			Destination is outside the current branch
 			#	WHILE	BEGIN	Destination is just past the an unconditional (26) jump back to label
@@ -2991,12 +3109,12 @@ sub VMexecute($;$){
 			my $jump_type;
 			#Find the last instruction in the branch, and see if it is a jump
 			my $last_opcode;					# Opcode of last intruction in branch
-			for (my $destination_id = 0 ; $destination_id <= $#VM_Instructions ; $destination_id++){
+			for (my $destination_id = 0 ; $destination_id <= $#VM_Instructions ; $destination_id++) {
 				if ($destination eq $VM_Instructions[$destination_id]{pos}) {
 					my $last_id			= ($destination_id - 1);
 					$last_opcode		= $VM_Instructions[$last_id]{opcode};
 					#Retrieve jump destination if it's an unconditional jump
-					$destination_last	= $VM_Instructions[$last_id]{operand}[0] if $last_opcode eq 0x1A;
+					$destination_last	= $VM_Instructions[$last_id]{operand}[0] if $last_opcode == 0x1A;
 					#Update the final destination if needed
 					$destination_end	= $destination_last if defined $destination_last;
 					last;
@@ -3005,7 +3123,8 @@ sub VMexecute($;$){
 			#Determine the corresponding branching construct
 #			{	#DEBUG
 #				print $File_Log "JUMP-UNLESS ($condition) (0x1B) during $type ($start-$end)\n";
-#				print $File_Log "Destination:\t $destination\n";
+#				print $File_Log "\tLabel:\t $VM_Label_Current\n";
+#				print $File_Log "\tDest:\t $destination\n";
 #				print $File_Log "\tLast:\t $destination_last\n"	if defined $destination_last;
 #				print $File_Log "\tEnd:\t $destination_end\n"	if defined $destination_end;
 #			}
@@ -3017,19 +3136,19 @@ sub VMexecute($;$){
 				#'Print' goto statement
 				VMprint("goto label$destination;");
 			}
-			elsif (defined $destination_last && $destination_last eq $VM_Label_Current) {						# WHILE-BEGIN
+			elsif (defined $destination_last && $destination_last eq $VM_Label_Current) {						# WHILE(BEGIN)
 				$jump_type		= 'WHILE(BEGIN)';
 				#'Print' while condition
 				VMprint("while ($condition) {");
 				#Start new branch
 				VMbranchStart('WHILE', $VM_Label_Current, $destination);
 			}
-			elsif ($type eq 'ELSIF' && $end eq $destination_end && $VM_Lines[$#VM_Lines]{text} eq 'else {') {	#ELSIF-IF
+			elsif ($type eq 'ELSIF' && $end eq $destination_end && $VM_Lines[$#VM_Lines]{text} eq 'else {') {	#ELSIF(IF)
 				$jump_type		= 'ELSIF(IF)';
 				#Splice an IF CONDITION into the previous ELSE
 				substr ($VM_Lines[$#VM_Lines]{text}, -2, 2, " if ($condition) {");
 			}
-			elsif (defined $destination_last && $pos < $destination_last && $destination_last <= $end ){		#ELSIF-BEGIN
+			elsif (defined $destination_last && $pos < $destination_last && $destination_last <= $end ) {		#ELSIF(BEGIN)
 				$jump_type		= 'ELSIF(BEGIN)';
 				#'Print' a conditional if
 				VMprint("if ($condition) {");
@@ -3047,11 +3166,11 @@ sub VMexecute($;$){
 			print $File_Log "$jump_type\t$location to $destination\tduring $type($start-$end)\n"	if $Option_Verbose;
 			return;
 		}
-#		if	($opcode eq 0x3B) {	# OPCJT				59
+#		if	($opcode == 0x3B) {	# OPCJT				59
 			#Conditional jump, can indicate different branching structures:
 			#
 #		}
-		if	($opcode eq 0x44) {	# OPCJST			68
+		if	($opcode == 0x44) {	# OPCJST			68
 			#Logical short-circuited OR evaluation
 			my $destination		= shift @operand;
 			#Add a new branch to execute at ending
@@ -3063,7 +3182,7 @@ sub VMexecute($;$){
 			print $File_Log "OR(BEGIN)\t$location to $destination\tduring $branch_type($branch_start-$branch_end)\n"	if $Option_Verbose;
 			return;
 		}
-		if	($opcode eq 0x45) {	# OPCJSF			69
+		if	($opcode == 0x45) {	# OPCJSF			69
 			#Logical short-circuited AND evaluation
 			my $destination		= shift @operand;
 			#Add a new branch to execute at ending
@@ -3075,7 +3194,7 @@ sub VMexecute($;$){
 			print $File_Log "AND(BEGIN)\t$location to $destination\tduring $branch_type($branch_start-$branch_end)\n"	if $Option_Verbose;
 			return;
 		}
-		if	($opcode eq 0x4B) {	# OPCSWITCH			75
+		if	($opcode == 0x4B) {	# OPCSWITCH			75
 			#Switch on the statement from stack according to switching table
 			my ($statement)		= VMstackPop();
 			my $table_start		= $instruction{switch_start};
@@ -3141,7 +3260,7 @@ sub VMexecute($;$){
 		}
 	}
 	{	#Function headers
-		if	($opcode eq 0x18) {	# OPCENTER			24
+		if	($opcode == 0x18) {	# OPCENTER			24
 			#States how many local variables to allocate, and should only apply once per codeblock
 			$VM_Fatal_Error			= "Duplicate OPCENTER" if $VM_Locals;
 			$VM_Locals				= shift @operand;
@@ -3150,7 +3269,7 @@ sub VMexecute($;$){
 			$VM_Label_Update++;
 			return;
 		}
-		if	($opcode eq 0x4D) {	# OPCCHKARGC		77
+		if	($opcode == 0x4D) {	# OPCCHKARGC		77
 			#States how many arguments to take in, and should only apply once per codeblock
 			$VM_Fatal_Error			= "Duplicate OPCCHKARGC" if $VM_Arguments;
 			$VM_Arguments			= shift @operand;
@@ -3159,11 +3278,11 @@ sub VMexecute($;$){
 			$VM_Label_Update++;
 			return;
 		}
-		if	($opcode eq 0x4E) {	# OPCLINE			78
+		if	($opcode == 0x4E) {	# OPCLINE			78
 			#Debug line info; Skipped for now
 			return;
 		}
-		if	($opcode eq 0x4F) {	# OPCFRAME			79
+		if	($opcode == 0x4F) {	# OPCFRAME			79
 			#Debug frame info; Skipped for now
 			return;
 		}
@@ -3171,20 +3290,20 @@ sub VMexecute($;$){
 	#Unhandled opcodes
 	$VM_Fatal_Error		= "Unhandled OpCode $opcode";
 }
-sub VMprint($;$){
+sub VMprint($;$) {
 	#'Print' a line with optional indent modifier
 	my $line	= shift;
 	my $indent	= shift;
-	$line		= ''	unless defined $line;
-	$indent		= 0		unless defined $indent;
+	$line		= 'nil;'	unless defined $line;
+	$indent		= 0			unless defined $indent;
 	push @VM_Lines, {
 		text	=> $line,
 		label	=> $VM_Label_Current,
 		indent	=> $#VM_Branches + $indent
-	};
+	} unless $line eq 'nil;';
 	$VM_Label_Update++;
 }
-sub VMstackPop(){
+sub VMstackPop() {
 	#Retrieve value from stack
 	my $value		= 'nil';
 	my $precedence	= 14;
@@ -3193,7 +3312,7 @@ sub VMstackPop(){
 	$precedence		= %{ $reference }{precedence}	if defined $reference;
 	return ($value, $precedence);
 }
-sub VMstackPush($$){
+sub VMstackPush($$) {
 	#Place value on stack
 	my $value		= shift;
 	my $precedence	= shift;
@@ -3204,7 +3323,7 @@ sub VMstackPush($$){
 		precedence	=> $precedence
 	};
 }
-sub VMbranchStart($$$){
+sub VMbranchStart($$$) {
 	#Start a branch of a given type and interval
 	my $type	= shift;
 	my $start	= shift;
@@ -3215,11 +3334,11 @@ sub VMbranchStart($$$){
 		end		=> $end
 	};
 }
-sub VMbranchEnd(){
+sub VMbranchEnd() {
 	#End the top branch
 	pop @VM_Branches;
 }
-sub VMbranchGet(){
+sub VMbranchGet() {
 	#Returning the type and interval of the top branch
 	return ('NONE', 0, 0) if $#VM_Branches eq -1;
 	my %branch	= %{ $VM_Branches[$#VM_Branches] };
@@ -3256,6 +3375,20 @@ sub cleanText($) {
 	$text	=~ s/["]/\\"/g;		#Double-quote
 	$text	=~ s/<</\\<<'/g;	#Embedded expression safety
 	return $text;
+}
+sub debug($;$) {
+	my $block	= shift;
+	my $id		= shift;
+	my $size	= length $block;
+	print $File_Log "Debug dump for $id\n"	if defined $id;
+	for (my $i=0 ; $i<$size ; $i++) {
+		my $char	= substr($block, $i, 1);
+		my $byte	= ord($char);
+		$char		= '' if $byte > 128 || $byte < 32;
+		my $int		= '';
+		$int		= unpack('s', substr($block, $i, 2)) if $i < ($size-1);
+		print $File_Log "\t$i\t$byte\t$char\t$int\n"
+	}
 }
 #Value Lookups
 sub propertyString($$) {
@@ -3383,37 +3516,72 @@ sub bestVocabularyToken($$;$) {
 
 #Symbolic Name Lookups
 sub nameAction($) {
-	my $id	= shift;
-	return 'UnknownAction'			unless defined $id;
-	return $Symbol_Action[$id]		if defined $Symbol_Action[$id];
-	return "Action$id";
+	my $action	= shift;
+	return 'actionX'				unless defined $action;
+	return $Symbol_Action[$action]		if defined $Symbol_Action[$action];
+	return "action$action";
 }
 sub nameBuiltin($) {
-	my $id	= shift;
-	return 'UnknownBuiltin'			unless defined $id;
-	return $Symbol_Builtin[$id]		if defined $Symbol_Builtin[$id];
-	return "Builtin$id";
+	my $builtin	= shift;
+	return 'builtinX'				unless defined $builtin;
+	return $Symbol_Builtin[$builtin]	if defined $Symbol_Builtin[$builtin];
+	return "builtin$builtin";
 }
 sub nameObject($) {
-	my $id	= shift;
-	return 'UnknownObject'			unless defined $id;
-	return 'nullObj'				if $id eq $Null_Value;
-	return $Symbol_Object[$id]		if defined $Symbol_Object[$id];
-	return "Obj$id";
+	my $obj	= shift;
+	return 'objX'				unless defined $obj;
+	return 'nullObj'				if $obj eq $Null_Value;
+	return $Symbol_Object[$obj]		if defined $Symbol_Object[$obj];
+	return "obj$obj";
 }
 sub nameProperty($) {
-	my $id	= shift;
-	return 'UnknownProperty'		unless defined $id;
-	return $Symbol_Property[$id]	if defined $Symbol_Property[$id];
-	return "prop$id";
+	my $prop	= shift;
+	return 'propX'				unless defined $prop;
+	return $Symbol_Property[$prop]	if defined $Symbol_Property[$prop];
+	return "prop$prop";
 }
 sub namePropertyType($) {
-	my $id	= shift;
-	return 'UnknownPropertyType'			unless defined $id;
-	return $Constant_Property_Type[$id]	if defined $Constant_Property_Type[$id];
-	return "PropType$id";
+	my $propType	= shift;
+	return 'propTypeX'							unless defined $propType;
+	return $Constant_Property_Type[$propType]		if defined $Constant_Property_Type[$propType];
+	return "propType$propType";
+}
+sub nameFunctionArgument($$) {
+	my $obj	= shift;
+	my $arg	= shift;
+	return "argX"	unless defined $obj;
+	return "argX"	unless defined $arg;
+	return $Symbol_Object_Argument{$obj}{$arg}	if defined $Symbol_Object_Argument{$obj}{$arg};
+	return "arg$arg";
+}
+sub nameFunctionVariable($$) {
+	my $obj	= shift;
+	my $var	= shift;
+	return "varX"	unless defined $obj;
+	return "varX"	unless defined $var;
+	return $Symbol_Object_Variable{$obj}{$var}	if defined $Symbol_Object_Variable{$obj}{$var};
+	return "var$var";
+}
+sub nameMethodArgument($$) {
+	my $prop= shift;
+	my $arg	= shift;
+	return "argX"	unless defined $prop;
+	return "argX"	unless defined $arg;
+	return $Symbol_Property_Argument{$prop}{$arg}	if defined $Symbol_Property_Argument{$prop}{$arg};
+	return "arg$arg";
+}
+sub nameMethodVariable($$$) {
+	my $obj	= shift;
+	my $prop= shift;
+	my $var	= shift;
+	return "varX"	unless defined $obj;
+	return "varX"	unless defined $prop;
+	return "varX"	unless defined $var;
+	return $Symbol_Property_Variable{$obj}{$prop}{$var}	if defined $Symbol_Property_Variable{$obj}{$prop}{$var};
+	return "var$var";
 }
 sub nameVariable($$) {
+	#TODO DEPRECATED
 	#Variable names are split on property/object and argument/local
 	my $type	= shift;	# Negative for object functions, positive for properties
 	my $id		= shift;	# Negative for arguments, positive for local variables.
@@ -3422,10 +3590,12 @@ sub nameVariable($$) {
 	#Local variables
 	if ($id > 0) {
 		if ($type > 0) {	# Properties
-			return $Symbol_Property_Variable[$type][$id]	if defined $Symbol_Property_Variable[$type][$id];
+			return nameMethodVariable(0, $type, $id);
+#			return $Symbol_Property_Variable[0][$type][$id]	if defined $Symbol_Property_Variable[0][$type][$id];
 		}
 		else {				# Functions
-			return $Symbol_Object_Variable[-$type][$id]		if defined $Symbol_Object_Variable[-$type][$id];
+			return nameFunctionVariable(-$type, $id);
+#			return $Symbol_Object_Variable[-$type][$id]		if defined $Symbol_Object_Variable[-$type][$id];
 		}
 		return "var$id";
 	}
@@ -3433,15 +3603,76 @@ sub nameVariable($$) {
 	else {
 #		$id		= -$id;
 		if ($type > 0) {	# Properties
-			return $Symbol_Property_Argument[$type][-$id]	if defined $Symbol_Property_Argument[$type][-$id];
+			return nameMethodArgument($type, -$id);
+#			return $Symbol_Property_Argument[$type][-$id]	if defined $Symbol_Property_Argument[$type][-$id];
 		}
 		else {				# Functions
-			return $Symbol_Object_Argument[-$type][-$id]	if defined $Symbol_Object_Argument[-$type][-$id];
+			return nameFunctionArgument(-$type, -$id);
+#			return $Symbol_Object_Argument[-$type][-$id]	if defined $Symbol_Object_Argument[-$type][-$id];
 		}
 		return "arg".-$id;
 	}
 }
-
+sub dumpSymbols($) {
+	my $obj			= shift;
+	#Determine if we're generating a property or function source 
+	print $File_Log	"Symbol tables for Obj$obj";
+	print $File_Log "($Symbol_Object[$obj])"		if defined $Symbol_Object[$obj];
+	print $File_Log	"\n";
+	print $File_Log	"obj$obj\t= '".nameObject($obj)."'\n";
+	{	# Function Arguments
+		my @keys	= sort keys %{ $Symbol_Object_Argument{$obj} };
+		#my $size	= @keys;
+		#print $File_Log "$size Function Arguments:\n";
+		foreach my $arg (@keys) {
+			#print $File_Log "arg$arg\t$Symbol_Object_Argument{$obj}{$arg}\n";
+			print $File_Log "obj$obj-arg$arg\t= '".nameFunctionArgument($obj, $arg)."'\n";
+		}
+	}
+	{	# Function Variables
+		my @keys	= sort keys %{ $Symbol_Object_Variable{$obj} };
+		#my $size	= @keys;
+		#print $File_Log "$size Function Variables:\n";
+		foreach my $var (@keys) {
+			#print $File_Log "var$var\t$Symbol_Object_Variable{$obj}{$var}\n";
+			print $File_Log "obj$obj-var$var\t= '".nameFunctionVariable($obj, $var)."'\n";
+		}
+	}
+	my @properties	= sort keys %{ $Objects[$obj]{properties} }; 
+	foreach my $prop (@properties) {
+		#print $File_Log	"\tSymbol tables for Obj$obj.Prop$prop";
+		#print $File_Log "($Symbol_Property[$prop])"		if defined $Symbol_Property[$prop];
+		#print $File_Log	"\n";
+		print $File_Log "prop$prop\t= '".nameProperty($prop)."'\n";
+		{	# Method Arguments
+			my @keys	= sort keys %{ $Symbol_Property_Argument{$prop} };
+			#my $size	= @keys;
+			#print $File_Log "\t$size Method Arguments:\n";
+			foreach my $arg (@keys) {
+				#print $File_Log "\targ$arg\t$Symbol_Property_Argument{$prop}{$arg}\n";
+				print $File_Log "prop$prop-arg$arg\t= '".nameMethodArgument($prop, $arg)."'\n";
+			}
+		}
+		{	# Method Default Variables
+			my @keys	= sort keys %{ $Symbol_Property_Variable{0}{$prop} };
+			#my $size	= @keys;
+			#print $File_Log "\t$size Method Variables:\n";
+			foreach my $var (@keys) {
+				#print $File_Log "\tvar$var\t$Symbol_Property_Variable{0}{$prop}{$var}\n";
+				print $File_Log "obj$obj-prop$prop-arg$var\t= '".nameMethodVariable(0, $prop, $var)."'\n";
+			}
+		}
+		{	# Method Variables
+			my @keys	= sort keys %{ $Symbol_Property_Variable{$obj}{$prop} };
+			#my $size	= @keys;
+			#print $File_Log "\t$size Method Variables:\n";
+			foreach my $var (@keys) {
+				#print $File_Log "\tvar$var\t$Symbol_Property_Variable{$obj}{$prop}{$var}\n";
+				print $File_Log "obj$obj-prop$prop-arg$var\t= '".nameMethodVariable($obj, $prop, $var)."'\n";
+			}
+		}
+	}
+}
 
 ##Main Program Loop
 initialize();		# Parse command line arguments for options and filename
@@ -3459,3 +3690,4 @@ analyze();			# Deeper analysis that depends on the entire story being parsed
 print "Generating output...\n";
 generate();			# Generate output and close the files
 print "Decompiling completed in ".(time - $Time_Start)." seconds.\n";
+#dumpSymbols(50);
